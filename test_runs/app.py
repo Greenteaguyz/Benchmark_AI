@@ -162,10 +162,22 @@ def parse_reasoning_and_answer(raw_text: str):
     return None, raw_text.strip()
 
 
+def format_latex_for_display(text: str) -> str:
+    """Formats LaTeX delimiters \\[ \\] to $$ and \\( \\) to $ strictly for display rendering, without altering raw saved output."""
+    if not text:
+        return ""
+    formatted = re.sub(r"\\\[", "$$", text)
+    formatted = re.sub(r"\\\]", "$$", formatted)
+    formatted = re.sub(r"\\\(", "$", formatted)
+    formatted = re.sub(r"\\\)", "$", formatted)
+    return formatted
+
+
+@st.cache_data(ttl=5, show_spinner=False)
 def check_ollama_status():
-    """Verifies Ollama is running and lists installed models."""
+    """Verifies Ollama is running and lists installed models (cached for 5s for fast UI)."""
     try:
-        r = requests.get(f"{OLLAMA_API_BASE}/api/tags", timeout=3)
+        r = requests.get(f"{OLLAMA_API_BASE}/api/tags", timeout=2)
         if r.status_code == 200:
             data = r.json()
             installed = [m["name"] for m in data.get("models", [])]
@@ -173,6 +185,95 @@ def check_ollama_status():
     except Exception:
         pass
     return False, []
+
+
+def is_model_installed(model_name: str, installed_tags: list[str]) -> bool:
+    """Checks if a model or tag is locally installed in Ollama."""
+    for tag in installed_tags:
+        if model_name == tag or tag.startswith(f"{model_name}:") or model_name.startswith(f"{tag.split(':')[0]}:"):
+            return True
+        if model_name == tag.split(":")[0]:
+            return True
+    return False
+
+
+def evict_ollama_model(model_name: str) -> bool:
+    """Sends keep_alive: 0 to Ollama to release model from 8 GB VRAM."""
+    try:
+        requests.post(
+            f"{OLLAMA_API_BASE}/api/generate",
+            json={"model": model_name, "keep_alive": 0},
+            timeout=4,
+        )
+        get_loaded_models.clear()
+        return True
+    except Exception:
+        return False
+
+
+@st.cache_data(ttl=3, show_spinner=False)
+def get_loaded_models() -> list[str]:
+    """Queries Ollama /api/ps to retrieve models currently active in VRAM (cached for 3s)."""
+    try:
+        r = requests.get(f"{OLLAMA_API_BASE}/api/ps", timeout=2)
+        if r.status_code == 200:
+            return [m.get("name", "") for m in r.json().get("models", [])]
+    except Exception:
+        pass
+    return []
+
+
+def is_model_loaded_in_vram(model_name: str, loaded_models: list[str]) -> bool:
+    """Checks if a model is currently resident in GPU memory."""
+    for m in loaded_models:
+        if model_name == m or m.startswith(f"{model_name}:") or model_name.startswith(f"{m.split(':')[0]}:"):
+            return True
+        if model_name == m.split(":")[0]:
+            return True
+    return False
+
+
+def load_model_into_vram(model_name: str) -> tuple[bool, str]:
+    """Pre-loads/warms up a model into GPU memory via Ollama API without generating text."""
+    try:
+        r = requests.post(
+            f"{OLLAMA_API_BASE}/api/generate",
+            json={"model": model_name, "keep_alive": "10m"},
+            timeout=120,
+        )
+        get_loaded_models.clear()
+        if r.status_code == 200:
+            return True, f"Model `{model_name}` successfully loaded into VRAM."
+        return False, f"Failed to load `{model_name}`: {r.text}"
+    except Exception as e:
+        return False, f"Loading error: {e}"
+
+
+def pull_ollama_model(model_name: str) -> tuple[bool, str]:
+    """Pulls a model from Ollama library."""
+    try:
+        r = requests.post(
+            f"{OLLAMA_API_BASE}/api/pull",
+            json={"name": model_name, "stream": False},
+            timeout=600,
+        )
+        check_ollama_status.clear()
+        get_loaded_models.clear()
+        if r.status_code == 200:
+            return True, f"Successfully pulled `{model_name}`."
+        return False, f"Pull failed: {r.text}"
+    except Exception as e:
+        return False, f"Pull error: {e}"
+
+
+# Streamlit fragment decorator fallback (gracefully supports older or newer Streamlit versions)
+fragment_decorator = getattr(st, "fragment", lambda f: f)
+
+# Initialize persistent session state for auto-updating latest result and model tracking
+if "latest_result" not in st.session_state:
+    st.session_state["latest_result"] = None
+if "last_loaded_model" not in st.session_state:
+    st.session_state["last_loaded_model"] = None
 
 
 def get_response_filename(qid: str, model_name: str) -> str:
@@ -353,147 +454,322 @@ else:
         unsafe_allow_html=True,
     )
 
-# Step 1: Model Selection
-col_m1, col_m2 = st.columns([1, 2])
-with col_m1:
-    selected_model = st.selectbox(
-        "1. Select Active Model",
-        list(REQUIRED_MODELS.keys()),
-        index=0,
-        help="Page 2 rule: Keep only one model loaded during each measurement."
-    )
-with col_m2:
-    m_info = REQUIRED_MODELS[selected_model]
-    st.markdown(
-        f"**Model:** `{selected_model}` | **Alias:** `{m_info['alias']}` | **Size:** `{m_info['size']}`<br>"
-        f"*{m_info['purpose']}*",
-        unsafe_allow_html=True
-    )
 
-# Step 2: Question Mode (Frozen Q01-Q15 vs Custom Typed Question)
-q_mode = st.radio(
-    "2. Question Source",
-    ["Select from 15 Frozen Benchmark Questions", "Custom Reasoning Question"],
-    horizontal=True,
-)
+@fragment_decorator
+def render_benchmark_control_panel():
+    # Query models currently resident in GPU memory via Ollama /api/ps
+    loaded_models = get_loaded_models()
 
-if q_mode.startswith("Select"):
-    c_cat, c_qid = st.columns([1, 1])
-    with c_cat:
-        category_filter = st.selectbox(
-            "Category",
-            ["All", "Mathematical reasoning", "Logical reasoning", "Programming reasoning"],
-        )
-    with c_qid:
-        filtered_qids = [
-            qid for qid, data in BENCHMARK_QUESTIONS.items()
-            if category_filter == "All" or data["category"] == category_filter
-        ]
-        selected_qid = st.selectbox("Question ID", filtered_qids)
-
-    q_data = BENCHMARK_QUESTIONS[selected_qid]
-    prompt_text = q_data["prompt"]
-    st.markdown(
-        f"<span class='badge badge-blue'>{q_data['category']}</span>"
-        f"<span class='badge badge-amber'>{q_data['difficulty']}</span>",
-        unsafe_allow_html=True,
-    )
-    active_prompt = st.text_area("Exact Prompt Wording (Frozen):", value=prompt_text, height=100)
-    current_qid = selected_qid
-else:
-    current_qid = st.text_input("Assign Question ID (e.g. Q_TEST01):", value="Q_TEST01")
-    active_prompt = st.text_area("Enter Typed Reasoning Question:", height=100, placeholder="Type any reasoning prompt to benchmark...")
-
-# Check if response already exists in active directory
-existing_file = get_response_filename(current_qid, selected_model)
-existing_path = os.path.join(active_target_dir, existing_file)
-if os.path.exists(existing_path):
-    st.warning(f"⚠️ Artifact `{existing_file}` already exists in `{active_target_dir}`. Running again will overwrite this record.")
-
-# Step 3: Run Inference
-if st.button("▶️ Run Benchmark Test & Capture Telemetry", type="primary", use_container_width=True):
-    if not is_online:
-        st.error("Cannot run test: Ollama is offline. Start the service first.")
-    elif not active_prompt.strip():
-        st.error("Prompt cannot be empty.")
-    else:
-        st.info(f"Submitting fresh request to `{selected_model}` under frozen conditions (T=0, Context=4096)...")
-        
-        start_vram = get_peak_vram_mb()
-        start_time = time.time()
-        
-        req_payload = {
-            "model": selected_model,
-            "prompt": active_prompt,
-            "stream": False,
-            "options": {
-                "temperature": FROZEN_SETTINGS["temperature"],
-                "num_ctx": FROZEN_SETTINGS["num_ctx"],
-                "num_predict": FROZEN_SETTINGS["num_predict"],
-            },
-        }
-
-        try:
-            with st.spinner("Generating unedited response from Ollama API..."):
-                resp = requests.post(f"{OLLAMA_API_BASE}/api/generate", json=req_payload, timeout=300)
-                total_duration_sec = round(time.time() - start_time, 3)
-                end_vram = get_peak_vram_mb()
-                peak_vram = max(start_vram, end_vram)
-
-            if resp.status_code == 200:
-                data = resp.json()
-                raw_response = data.get("response", "")
-                
-                # Telemetry extraction directly from Ollama Generate API
-                eval_count = data.get("eval_count", 0)
-                eval_duration_ns = data.get("eval_duration", 0)
-                eval_duration_sec = round(eval_duration_ns / 1e9, 3) if eval_duration_ns else total_duration_sec
-                tokens_per_sec = round(eval_count / eval_duration_sec, 2) if eval_duration_sec > 0 else 0.0
-                completion_status = "Completed" if data.get("done", False) else "Cutoff"
-
-                st.success("✅ Benchmark Run Complete!")
-
-                # Render Telemetry Metrics
-                t1, t2, t3, t4, t5 = st.columns(5)
-                t1.metric("Total Time", f"{total_duration_sec} s")
-                t2.metric("Output Tokens", f"{eval_count}")
-                t3.metric("Generation Speed", f"{tokens_per_sec} tok/s")
-                t4.metric("Peak VRAM", f"{peak_vram:.0f} MB")
-                t5.metric("Status", completion_status)
-
-                # Render Response
-                st.subheader("Complete Unedited Response")
-                thought, final_ans = parse_reasoning_and_answer(raw_response)
-                if thought:
-                    with st.expander("💭 Reasoning Trace (<think>)", expanded=False):
-                        st.markdown(thought)
-                st.markdown(final_ans)
-
-                # Automatic Compliant Storage
-                saved_filepath = save_response_artifact(current_qid, selected_model, active_prompt, raw_response, active_target_dir)
-                st.success(f"💾 Evidence saved to: `{saved_filepath}` (conforming to docs/response_schema.json)", icon="📁")
-
-                # Log to CSV (Page 6 requirement)
-                log_record = {
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "question_id": current_qid,
-                    "model": selected_model,
-                    "model_alias": m_info["alias"],
-                    "total_duration_s": total_duration_sec,
-                    "generation_duration_s": eval_duration_sec,
-                    "output_tokens": eval_count,
-                    "tokens_per_sec": tokens_per_sec,
-                    "peak_vram_mb": peak_vram,
-                    "completion_status": completion_status,
-                    "evidence_file": saved_filepath,
-                }
-                log_comparison_csv(log_record, active_csv_path)
-
+    # Step 1: Model Selection with VRAM Loading & Eviction Controls
+    col_m1, col_m2 = st.columns([1, 2])
+    with col_m1:
+        def format_model_option(m_key: str) -> str:
+            alias = REQUIRED_MODELS[m_key]["alias"]
+            installed = is_model_installed(m_key, installed_tags)
+            loaded = is_model_loaded_in_vram(m_key, loaded_models)
+            if loaded:
+                status = "🟢 In VRAM"
+            elif installed:
+                status = "✅ On Disk"
             else:
-                st.error(f"Inference error {resp.status_code}: {resp.text}")
+                status = "⚠️ Missing"
+            return f"{m_key} ({alias}) — {status}"
 
-        except Exception as err:
-            st.error(f"Execution failed: {err}. As per guidelines, technical failures must be documented.")
+        selected_model = st.selectbox(
+            "1. Select Active Model",
+            list(REQUIRED_MODELS.keys()),
+            index=0,
+            format_func=format_model_option,
+            key="active_model_selectbox",
+            help="Page 2 rule: Keep only one model loaded during each measurement."
+        )
+
+        auto_load = st.checkbox(
+            "⚡ Auto-load into VRAM on switch",
+            value=False,
+            key="auto_load_model_vram",
+            help="Automatically pre-loads weights into GPU memory whenever you change models."
+        )
+
+        # Automatic VRAM eviction if user switches models to avoid 8GB VRAM saturation
+        if st.session_state.get("last_loaded_model") and st.session_state["last_loaded_model"] != selected_model:
+            evict_ollama_model(st.session_state["last_loaded_model"])
+            st.session_state["last_loaded_model"] = selected_model
+            if auto_load and is_model_installed(selected_model, installed_tags):
+                load_model_into_vram(selected_model)
+        elif not st.session_state.get("last_loaded_model"):
+            st.session_state["last_loaded_model"] = selected_model
+            if auto_load and is_model_installed(selected_model, installed_tags):
+                load_model_into_vram(selected_model)
+
+    with col_m2:
+        m_info = REQUIRED_MODELS[selected_model]
+        m_installed = is_model_installed(selected_model, installed_tags)
+        m_loaded = is_model_loaded_in_vram(selected_model, loaded_models)
+
+        if m_loaded:
+            status_tag = "<span class='badge badge-blue'>🟢 Loaded in VRAM</span>"
+        elif m_installed:
+            status_tag = "<span class='badge badge-green'>✅ Installed (Idle on Disk)</span>"
+        else:
+            status_tag = f"<span class='badge badge-amber'>⚠️ Missing (Run: `ollama pull {selected_model}`)</span>"
+
+        st.markdown(
+            f"**Model:** `{selected_model}` | **Alias:** `{m_info['alias']}` | **Size:** `{m_info['size']}` {status_tag}<br>"
+            f"*{m_info['purpose']}*",
+            unsafe_allow_html=True
+        )
+
+        # Model Loading & VRAM Action Buttons
+        col_act1, col_act2, col_act3 = st.columns([1, 1, 1])
+        with col_act1:
+            load_disabled = not m_installed or m_loaded
+            btn_label = "⚡ Loaded in VRAM" if m_loaded else "⚡ Load into VRAM"
+            if st.button(btn_label, key="load_vram_btn", disabled=load_disabled, help="Pre-loads model into GPU memory without sending a prompt"):
+                with st.spinner(f"Loading `{selected_model}` into VRAM..."):
+                    ok, msg = load_model_into_vram(selected_model)
+                    if ok:
+                        st.toast(f"Loaded `{selected_model}` into VRAM!", icon="⚡")
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+        with col_act2:
+            unload_disabled = not m_loaded
+            if st.button("🧹 Free VRAM", key="evict_vram_btn", disabled=unload_disabled, help="Evicts model from 8 GB VRAM to free GPU memory"):
+                evict_ollama_model(selected_model)
+                st.toast(f"Evicted `{selected_model}` from VRAM!", icon="🧹")
+                st.rerun()
+
+        with col_act3:
+            if not m_installed:
+                if st.button(f"📥 Pull `{m_info['alias']}`", key="pull_model_btn", help=f"Downloads {selected_model} via Ollama"):
+                    with st.spinner(f"Downloading `{selected_model}` (this may take a few minutes)..."):
+                        ok, msg = pull_ollama_model(selected_model)
+                        if ok:
+                            st.toast(f"Downloaded `{selected_model}`!", icon="📥")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+    # Step 2: Question Mode (Frozen Q01-Q15 vs Custom Typed Question)
+    q_mode = st.radio(
+        "2. Question Source",
+        ["Select from 15 Frozen Benchmark Questions", "Custom Reasoning Question"],
+        horizontal=True,
+        key="benchmark_question_source_mode",
+    )
+
+    if q_mode.startswith("Select"):
+        c_cat, c_qid = st.columns([1, 1])
+        with c_cat:
+            category_filter = st.selectbox(
+                "Category",
+                ["All", "Mathematical reasoning", "Logical reasoning", "Programming reasoning"],
+                key="benchmark_category_filter",
+            )
+        with c_qid:
+            filtered_qids = [
+                qid for qid, data in BENCHMARK_QUESTIONS.items()
+                if category_filter == "All" or data["category"] == category_filter
+            ]
+            selected_qid = st.selectbox("Question ID", filtered_qids, key="benchmark_qid_picker")
+
+        q_data = BENCHMARK_QUESTIONS[selected_qid]
+        prompt_text = q_data["prompt"]
+        st.markdown(
+            f"<span class='badge badge-blue'>{q_data['category']}</span>"
+            f"<span class='badge badge-amber'>{q_data['difficulty']}</span>",
+            unsafe_allow_html=True,
+        )
+        active_prompt = st.text_area("Exact Prompt Wording (Frozen):", value=prompt_text, height=100, key="benchmark_frozen_prompt_area")
+        current_qid = selected_qid
+    else:
+        current_qid = st.text_input("Assign Question ID (e.g. Q_TEST01):", value="Q_TEST01", key="benchmark_custom_qid_input")
+        active_prompt = st.text_area("Enter Typed Reasoning Question:", height=100, placeholder="Type any reasoning prompt to benchmark...", key="benchmark_custom_prompt_area")
+
+    # Step 3: Hyperparameter & Temperature Adjustment
+    if is_test_mode:
+        with st.expander("🎛️ Adjustable Inference Settings (Sandbox Mode)", expanded=False):
+            p_col1, p_col2, p_col3 = st.columns(3)
+            with p_col1:
+                active_temp = st.slider(
+                    "Temperature",
+                    min_value=0.0,
+                    max_value=1.5,
+                    value=0.0,
+                    step=0.05,
+                    key="param_temperature_slider",
+                    help="0.0 = completely deterministic reasoning. 0.7+ = more creative and varied answers.",
+                )
+            with p_col2:
+                active_predict = st.number_input(
+                    "Max Output Tokens (num_predict)",
+                    min_value=128,
+                    max_value=4096,
+                    value=FROZEN_SETTINGS["num_predict"],
+                    step=128,
+                    key="param_num_predict_input",
+                )
+            with p_col3:
+                active_ctx = st.number_input(
+                    "Context Window (num_ctx)",
+                    min_value=1024,
+                    max_value=8192,
+                    value=FROZEN_SETTINGS["num_ctx"],
+                    step=512,
+                    key="param_num_ctx_input",
+                )
+    else:
+        active_temp = FROZEN_SETTINGS["temperature"]
+        active_predict = FROZEN_SETTINGS["num_predict"]
+        active_ctx = FROZEN_SETTINGS["num_ctx"]
+        st.caption("🔒 **Official Mode:** Hyperparameters locked (`Temperature = 0.0`, `Context = 4096`, `Max Output = 1024`).")
+
+    # Check if response already exists in active directory
+    existing_file = get_response_filename(current_qid, selected_model)
+    existing_path = os.path.join(active_target_dir, existing_file)
+    if os.path.exists(existing_path):
+        st.warning(f"⚠️ Artifact `{existing_file}` already exists in `{active_target_dir}`. Running again will overwrite this record.")
+
+    # Dynamic container for live streaming and instant result rendering
+    stream_status_box = st.empty()
+    stream_text_box = st.empty()
+    result_box = st.empty()
+
+    # Step 4: Run Inference with Live Streaming
+    if st.button("▶️ Run Benchmark Test & Capture Telemetry", type="primary", use_container_width=True, key="run_benchmark_btn"):
+        if not is_online:
+            st.error("Cannot run test: Ollama is offline. Start the service first.")
+        elif not active_prompt.strip():
+            st.error("Prompt cannot be empty.")
+        else:
+            stream_status_box.info(f"⚡ Streaming live from `{selected_model}` (T={active_temp}, Context={active_ctx})...")
+            
+            start_vram = get_peak_vram_mb()
+            start_time = time.time()
+            
+            req_payload = {
+                "model": selected_model,
+                "prompt": active_prompt,
+                "stream": True,
+                "options": {
+                    "temperature": float(active_temp),
+                    "num_ctx": int(active_ctx),
+                    "num_predict": int(active_predict),
+                },
+            }
+
+            try:
+                full_raw_response = ""
+                eval_count = 0
+                eval_duration_ns = 0
+                completion_status = "Completed"
+
+                with requests.post(f"{OLLAMA_API_BASE}/api/generate", json=req_payload, stream=True, timeout=300) as resp:
+                    if resp.status_code == 200:
+                        for line in resp.iter_lines():
+                            if line:
+                                chunk = json.loads(line)
+                                token = chunk.get("response", "")
+                                full_raw_response += token
+                                stream_text_box.markdown(full_raw_response + " ▌")
+                                
+                                if chunk.get("done", False):
+                                    eval_count = chunk.get("eval_count", 0)
+                                    eval_duration_ns = chunk.get("eval_duration", 0)
+                                    done_reason = chunk.get("done_reason", "stop")
+                                    completion_status = "Completed" if done_reason == "stop" else done_reason
+
+                        total_duration_sec = round(time.time() - start_time, 3)
+                        end_vram = get_peak_vram_mb()
+                        peak_vram = max(start_vram, end_vram)
+                        eval_duration_sec = round(eval_duration_ns / 1e9, 3) if eval_duration_ns else total_duration_sec
+                        tokens_per_sec = round(eval_count / eval_duration_sec, 2) if eval_duration_sec > 0 else 0.0
+
+                        # Instantly clear raw stream placeholder and status
+                        stream_text_box.empty()
+                        stream_status_box.empty()
+
+                        # Parse thought and verified answer
+                        thought, final_ans = parse_reasoning_and_answer(full_raw_response)
+
+                        # Automatic Compliant Storage
+                        saved_filepath = save_response_artifact(current_qid, selected_model, active_prompt, full_raw_response, active_target_dir)
+
+                        # Log to CSV (Page 6 requirement)
+                        log_record = {
+                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "question_id": current_qid,
+                            "model": selected_model,
+                            "model_alias": m_info["alias"],
+                            "total_duration_s": total_duration_sec,
+                            "generation_duration_s": eval_duration_sec,
+                            "output_tokens": eval_count,
+                            "tokens_per_sec": tokens_per_sec,
+                            "peak_vram_mb": peak_vram,
+                            "completion_status": completion_status,
+                            "evidence_file": saved_filepath,
+                        }
+                        log_comparison_csv(log_record, active_csv_path)
+
+                        # Store latest result in session state
+                        st.session_state["latest_result"] = {
+                            "question_id": current_qid,
+                            "model": selected_model,
+                            "model_alias": m_info["alias"],
+                            "prompt": active_prompt,
+                            "raw_response": full_raw_response,
+                            "thought": thought,
+                            "final_ans": final_ans,
+                            "total_duration_sec": total_duration_sec,
+                            "eval_duration_sec": eval_duration_sec,
+                            "eval_count": eval_count,
+                            "tokens_per_sec": tokens_per_sec,
+                            "peak_vram": peak_vram,
+                            "completion_status": completion_status,
+                            "saved_filepath": saved_filepath,
+                            "temperature": active_temp,
+                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        }
+
+                    else:
+                        stream_status_box.error(f"Inference error {resp.status_code}: {resp.text}")
+
+            except Exception as err:
+                stream_status_box.error(f"Execution failed: {err}. As per guidelines, technical failures must be documented.")
+
+    # Render persistent & latest benchmark result immediately in-place (0ms delay)
+    if st.session_state.get("latest_result"):
+        res = st.session_state["latest_result"]
+        with result_box.container():
+            st.markdown("---")
+            st.subheader("⚡ Latest Benchmark Result")
+            st.caption(
+                f"**Model:** `{res['model']}` (`{res['model_alias']}`) | "
+                f"**Question:** `{res['question_id']}` | "
+                f"**Temperature:** `{res.get('temperature', 0.0)}` | "
+                f"**Finished at:** `{res['timestamp']}`"
+            )
+
+            t1, t2, t3, t4, t5 = st.columns(5)
+            t1.metric("Total Time", f"{res['total_duration_sec']} s")
+            t2.metric("Output Tokens", f"{res['eval_count']}")
+            t3.metric("Generation Speed", f"{res['tokens_per_sec']} tok/s")
+            t4.metric("Peak VRAM", f"{res['peak_vram']:.0f} MB")
+            t5.metric("Status", res["completion_status"])
+
+            if res.get("thought"):
+                with st.expander("💭 Reasoning Trace (<think>)", expanded=True):
+                    st.markdown(format_latex_for_display(res["thought"]))
+
+            st.markdown("#### Verified Output")
+            st.markdown(format_latex_for_display(res["final_ans"]))
+            st.success(f"💾 Evidence saved to: `{res['saved_filepath']}` (conforming to docs/response_schema.json)", icon="📁")
+
+
+# Render the isolated benchmark control panel
+render_benchmark_control_panel()
 
 # --- 6. Inspect Saved Evidence & Comparison Log ---
 st.divider()

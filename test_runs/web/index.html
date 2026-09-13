@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM Reasoning Benchmark (8GB VRAM) — Local Evaluation Suite</title>
+  <meta name="description" content="Local reasoning LLM benchmarking and telemetry collection tool for 8GB VRAM computers. Evaluates phi4-mini, deepseek-r1:7b, and qwen3:8b under strict controlled scientific parameters.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- KaTeX for rendering mathematical symbols & LaTeX formulas (Local Zero-Latency) -->
+  <link rel="stylesheet" href="/static/vendor/katex.min.css">
+  <script src="/static/vendor/katex.min.js"></script>
+  <script src="/static/vendor/auto-render.min.js"></script>
+
+  <!-- Marked.js for rich markdown parsing (Local Zero-Latency) -->
+  <script src="/static/vendor/marked.min.js"></script>
+
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <header class="app-header">
+    <div class="brand-container">
+      <span class="brand-logo">⚖️</span>
+      <div>
+        <h1 class="brand-title">LLM Reasoning Benchmark Suite</h1>
+        <p class="brand-subtitle">8 GB VRAM Constrained Hardware Study • KiTH Research</p>
+      </div>
+    </div>
+
+    <div class="header-status-pill">
+      <!-- Mode Toggle -->
+      <div class="mode-toggle-group" id="modeToggleGroup">
+        <button type="button" class="mode-btn active test" id="modeBtnTest" data-mode="test">🧪 Test Sandbox</button>
+        <button type="button" class="mode-btn official" id="modeBtnOfficial" data-mode="official">📋 Official Benchmark</button>
+      </div>
+
+      <!-- Engine Status -->
+      <div class="telemetry-badge" id="engineStatusBadge" title="Ollama API Connectivity">
+        <span class="status-dot" id="ollamaStatusDot"></span>
+        <span id="ollamaStatusText">Connecting...</span>
+      </div>
+
+      <!-- Live VRAM Badge -->
+      <div class="telemetry-badge" id="vramTelemetryBadge" title="Current GPU Memory Usage via nvidia-smi">
+        <span>🎮</span>
+        <span id="vramTelemetryText">0 MB VRAM</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <div class="app-container">
+
+    <!-- Left Sidebar: Progress Matrix & Rubric Reference -->
+    <aside class="sidebar">
+      
+      <!-- Mode Info Box -->
+      <div class="mode-banner test" id="modeBanner">
+        <span>🧪</span>
+        <div id="modeBannerText">
+          <b>Test Mode Active:</b> Evidence saves to <code>test_runs/responses/</code>. Official dataset remains pristine.
+        </div>
+      </div>
+
+      <!-- 45-Response Official Progress Matrix -->
+      <div class="card" id="progressCard">
+        <div class="card-header">
+          <h2 class="card-title">📊 Official 45 Progress</h2>
+          <span class="badge badge-green" id="progressBadge">0 / 45</span>
+        </div>
+        <p class="card-subtitle">Page 6 Requirement: Non-regeneration rule enforced.</p>
+        
+        <div class="progress-bar-container">
+          <div class="progress-bar-fill" id="progressBarFill"></div>
+        </div>
+        
+        <div style="margin-top: 14px;">
+          <details id="coverageTableDetails">
+            <summary style="font-size: 0.8rem; cursor: pointer; color: var(--accent-cyan); font-weight: 600;">
+              View 45-File Coverage Table
+            </summary>
+            <div style="max-height: 220px; overflow-y: auto; margin-top: 8px;">
+              <table class="matrix-table" id="matrixTable">
+                <thead>
+                  <tr>
+                    <th>QID</th>
+                    <th>PHI</th>
+                    <th>DSR1</th>
+                    <th>QWEN</th>
+                  </tr>
+                </thead>
+                <tbody id="matrixTableBody">
+                  <!-- Injected via JavaScript -->
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- Scoring Rubric Guide Drawer -->
+      <div class="card" id="rubricCard">
+        <div class="card-header">
+          <h2 class="card-title">📖 Evaluation Rubric</h2>
+          <span class="badge badge-purple">0–8 Total</span>
+        </div>
+        <div style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.6;">
+          <p><b>1. Final Answer (0–2):</b> 2 = Correct | 1 = Partial | 0 = Incorrect</p>
+          <p><b>2. Reasoning Quality (0–2):</b> 2 = Clear | 1 = Minor gap | 0 = Illogical</p>
+          <p><b>3. Instruction Following (0–2):</b> 2 = Complete | 1 = Partial | 0 = Fails</p>
+          <p><b>4. Factual Support (0–2):</b> 2 = Sound | 1 = Minor issue | 0 = Hallucination</p>
+        </div>
+      </div>
+
+      <!-- VRAM Control Notice -->
+      <div class="card" style="background: rgba(30, 41, 59, 0.4);">
+        <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.5;">
+          🔒 <b>8GB VRAM Constraint:</b> Always keep only 1 model loaded during active measurement to avoid CPU fallback and latency spikes.
+        </p>
+      </div>
+
+    </aside>
+
+    <!-- Main Content Stage -->
+    <main class="main-content">
+
+      <!-- 1. Model Selector & VRAM Deck -->
+      <section class="card" id="modelControlDeck">
+        <div class="card-header">
+          <h2 class="card-title">1. Active Model & GPU VRAM Management</h2>
+          <div id="modelStatusTag">
+            <!-- Dynamic model badge -->
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start;">
+          <div>
+            <div class="form-group">
+              <label for="modelSelect" class="form-label">Select Active Reasoning Model:</label>
+              <select id="modelSelect">
+                <!-- Injected via JavaScript -->
+              </select>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+              <input type="checkbox" id="autoLoadVramCheckbox" style="accent-color: var(--accent-cyan); width: 16px; height: 16px;">
+              <label for="autoLoadVramCheckbox" style="font-size: 0.8rem; color: var(--text-secondary); cursor: pointer;">
+                ⚡ Auto-load model into VRAM when selected
+              </label>
+            </div>
+          </div>
+
+          <div>
+            <p id="modelDescriptionText" style="font-size: 0.84rem; color: var(--text-secondary); margin-bottom: 12px; min-height: 38px;">
+              Select a model to view specs.
+            </p>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+              <button type="button" class="btn btn-secondary btn-sm" id="loadVramBtn" title="Pre-loads model into GPU memory">
+                ⚡ Load into VRAM
+              </button>
+              <button type="button" class="btn btn-danger btn-sm" id="evictVramBtn" title="Evicts model from GPU memory">
+                🧹 Free VRAM
+              </button>
+              <button type="button" class="btn btn-primary btn-sm" id="pullModelBtn" style="display: none;" title="Downloads model from Ollama library">
+                📥 Pull Model
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Question Source Deck -->
+      <section class="card" id="questionControlDeck">
+        <div class="card-header">
+          <h2 class="card-title">2. Reasoning Question Selection</h2>
+          <div id="questionMetaBadges">
+            <!-- Badges for category & difficulty -->
+          </div>
+        </div>
+
+        <div class="radio-tabs" id="questionSourceTabs">
+          <div class="radio-tab active" id="tabFrozenQuestions" data-tab="frozen">
+            Select from 15 Frozen Benchmark Questions
+          </div>
+          <div class="radio-tab" id="tabCustomPrompt" data-tab="custom">
+            Custom Typed Reasoning Question
+          </div>
+        </div>
+
+        <!-- Frozen Question Controls -->
+        <div id="frozenQuestionContainer" style="display: block;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 12px;">
+            <div class="form-group">
+              <label for="categoryFilter" class="form-label">Category Filter:</label>
+              <select id="categoryFilter">
+                <option value="All">All Categories</option>
+                <option value="Mathematical reasoning">Mathematical reasoning</option>
+                <option value="Logical reasoning">Logical reasoning</option>
+                <option value="Programming reasoning">Programming reasoning</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="questionSelect" class="form-label">Question ID:</label>
+              <select id="questionSelect">
+                <!-- Injected via JavaScript -->
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="frozenPromptText" class="form-label">Exact Frozen Prompt Text:</label>
+            <textarea id="frozenPromptText" readonly style="background: rgba(15, 23, 42, 0.6); color: #cbd5e1;"></textarea>
+          </div>
+        </div>
+
+        <!-- Custom Prompt Controls -->
+        <div id="customQuestionContainer" style="display: none;">
+          <div class="form-group">
+            <label for="customQidInput" class="form-label">Assign Question ID:</label>
+            <input type="text" id="customQidInput" value="Q_TEST01" placeholder="e.g. Q_CUSTOM01">
+          </div>
+          <div class="form-group">
+            <label for="customPromptText" class="form-label">Enter Custom Reasoning Prompt:</label>
+            <textarea id="customPromptText" placeholder="Type your reasoning question here..."></textarea>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Inference Hyperparameters Deck -->
+      <section class="card" id="hyperparameterDeck">
+        <div class="card-header">
+          <h2 class="card-title">3. Inference Hyperparameters</h2>
+          <span class="badge badge-amber" id="paramModeBadge">Adjustable (Test Mode)</span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+          <!-- Temperature Slider -->
+          <div class="form-group">
+            <label for="tempSlider" class="form-label">Temperature (Stochasticity):</label>
+            <div class="slider-container">
+              <input type="range" id="tempSlider" min="0.0" max="1.5" step="0.05" value="0.0">
+              <span class="slider-val" id="tempValueLabel">0.00</span>
+            </div>
+            <p style="font-size: 0.72rem; color: var(--text-muted); margin-top: 4px;">
+              0.0 = Deterministic greedy decoding.
+            </p>
+          </div>
+
+          <!-- Max Tokens -->
+          <div class="form-group">
+            <label for="numPredictInput" class="form-label">Max Output Tokens (num_predict):</label>
+            <input type="number" id="numPredictInput" min="128" max="4096" step="128" value="1024">
+          </div>
+
+          <!-- Context Window -->
+          <div class="form-group">
+            <label for="numCtxInput" class="form-label">Context Window (num_ctx):</label>
+            <input type="number" id="numCtxInput" min="1024" max="8192" step="512" value="4096">
+          </div>
+        </div>
+
+        <div id="officialLockedNotice" style="display: none; margin-top: 8px; font-size: 0.78rem; color: var(--accent-emerald);">
+          🔒 Locked to Frozen Parameters (T=0.0, Context=4096, Max Tokens=1024) for official benchmark compliance.
+        </div>
+      </section>
+
+      <!-- Run Button -->
+      <button type="button" class="btn btn-primary btn-large" id="runBenchmarkBtn">
+        ▶️ Run Benchmark Test & Stream Telemetry
+      </button>
+
+      <!-- 4. Live Output & Telemetry Scoreboard -->
+      <section class="card output-deck" id="outputSection" style="display: none;">
+        <div class="card-header">
+          <h2 class="card-title">⚡ Benchmark Telemetry & Model Output</h2>
+          <span class="badge badge-blue" id="outputMetaBadge">PHI • Q01</span>
+        </div>
+
+        <!-- 5 Telemetry Metric Cards -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-label">Total Time</div>
+            <div class="metric-value" id="metricTotalTime">0.0 s</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Output Tokens</div>
+            <div class="metric-value" id="metricTokens">0</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Speed</div>
+            <div class="metric-value" id="metricSpeed">0 tok/s</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Peak VRAM</div>
+            <div class="metric-value" id="metricVram">0 MB</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Status</div>
+            <div class="metric-value" id="metricStatus" style="font-size: 0.95rem; color: var(--accent-emerald);">Completed</div>
+          </div>
+        </div>
+
+        <!-- Collapsible <think> Reasoning Drawer -->
+        <div class="think-drawer" id="thinkDrawer" style="display: none;">
+          <div class="think-header" id="thinkHeader">
+            <span>💭 Reasoning Trace (&lt;think&gt;)</span>
+            <span id="thinkToggleIcon">▼</span>
+          </div>
+          <div class="think-content" id="thinkContent">
+            <!-- Injected streamed tokens -->
+          </div>
+        </div>
+
+        <!-- Final Answer Container -->
+        <div style="margin-top: 10px;">
+          <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">
+            Verified Model Output
+          </div>
+          <div class="final-answer-container" id="finalAnswerContainer">
+            <!-- Injected final response text -->
+          </div>
+        </div>
+
+        <!-- Saved Artifact Notification Banner -->
+        <div id="savedArtifactBanner" style="display: none; margin-top: 14px; padding: 10px 14px; background: rgba(16, 185, 129, 0.15); border: 1px solid var(--accent-emerald); border-radius: var(--radius-md); font-size: 0.8rem; color: #6ee7b7;">
+          💾 <b>Artifact Saved:</b> <code id="savedArtifactPath"></code> (strictly conforms to <code>docs/response_schema.json</code>)
+        </div>
+      </section>
+
+      <!-- 5. Artifact & Comparison Log Inspector -->
+      <section class="card" id="inspectorSection">
+        <div class="card-header">
+          <h2 class="card-title">🔍 Evidence Inspector & Comparison Log</h2>
+          <button type="button" class="btn btn-secondary btn-sm" id="refreshLogsBtn">🔄 Refresh Logs</button>
+        </div>
+
+        <div class="data-table-container">
+          <table class="data-table" id="logsTable">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>QID</th>
+                <th>Model</th>
+                <th>Total (s)</th>
+                <th>Tokens</th>
+                <th>Tok/s</th>
+                <th>Peak VRAM</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="logsTableBody">
+              <tr>
+                <td colspan="8" style="text-align: center; color: var(--text-muted);">No records found.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Past Data Pop-out Inspection Modal Dialog -->
+  <div class="modal-backdrop" id="artifactModal" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <h3 class="modal-title" id="modalTitle">Q02 — DeepSeek-R1</h3>
+            <span class="badge badge-blue" id="modalBadge">Mathematical reasoning</span>
+          </div>
+          <p class="modal-subtitle" id="modalSubtitle">Logged run details</p>
+        </div>
+        <button type="button" class="modal-close-btn" id="modalCloseBtn" title="Close (Esc)">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Prompt Box -->
+        <div class="modal-prompt-box">
+          <div class="modal-section-label">Input Prompt</div>
+          <div id="modalPromptText" class="modal-prompt-content"></div>
+        </div>
+
+        <!-- Telemetry Metrics Bar -->
+        <div class="modal-metrics-bar" id="modalMetricsBar">
+          <!-- Dynamically populated -->
+        </div>
+
+        <!-- <think> Reasoning Trace Drawer -->
+        <div class="think-drawer" id="modalThinkDrawer" style="display: none; margin-bottom: 16px;">
+          <div class="think-header" id="modalThinkHeader">
+            <span>💭 Past Reasoning Process (&lt;think&gt;)</span>
+            <span id="modalThinkToggleIcon">▼</span>
+          </div>
+          <div class="think-content" id="modalThinkContent"></div>
+        </div>
+
+        <!-- Final Verified Output -->
+        <div>
+          <div class="modal-section-label">Model Final Output</div>
+          <div class="final-answer-container" id="modalOutputContainer"></div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono);" id="modalFilePath"></span>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="btn btn-secondary btn-sm" id="modalCopyBtn">📋 Copy Answer</button>
+          <button type="button" class="btn btn-primary btn-sm" id="modalCloseFooterBtn">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
