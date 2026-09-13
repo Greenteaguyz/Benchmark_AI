@@ -1,10 +1,5 @@
 # Response Naming Convention
 
-*Deliverable for Day 1: Student 1 (Hout Chanvireak)*  
-*Conforms strictly to Project Plan Page 6: Response naming convention*
-
----
-
 All 45 complete and unedited model responses are saved in `data/responses/` using the format:  
 **`Q{ID}_{MODEL}.json`**
 
@@ -20,6 +15,6 @@ All 45 complete and unedited model responses are saved in `data/responses/` usin
 
 ### Scope & Structure
 - **Question Range:** `Q01` to `Q15` (15 questions total).
-- **Total Dataset:** 15 questions $\times$ 3 models = **45 JSON response files**.
+- **Total Dataset:** 15 questions x 3 models = **45 JSON response files**.
 - **Directory:** `data/responses/`
 - **Schema Reference:** Supported by [`docs/response_schema.json`](./response_schema.json) and [`tool/response_schema.py`](../tool/response_schema.py).

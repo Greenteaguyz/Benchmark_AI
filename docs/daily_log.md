@@ -9,6 +9,6 @@
 
 | Package (Tag) | Alias | Parameters | Size (Disk) | Purpose in Benchmark | Official Link |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `phi4-mini-reasoning` | `PHI` | 3.84B | ~3.2 GB | Lightweight reasoning baseline for constrained hardware | [Ollama Library](https://ollama.com/library/phi4-mini-reasoning) |
-| `deepseek-r1:7b` | `DSR1` | 7.62B | ~4.7 GB | Compact distilled reasoning model | [Ollama Library](https://ollama.com/library/deepseek-r1) |
-| `qwen3:8b` | `QWEN` | 8.19B | ~5.2 GB | Larger general reasoning comparison model | [Ollama Library](https://ollama.com/library/qwen3) |
+| `phi4-mini-reasoning` | `PHI` | 3.84B | ~3.2 GB | Lightweight reasoning baseline for constrained hardware | [Ollama Library](https://ollama.com/library/phi4-mini-reasoning:latest) |
+| `deepseek-r1:7b` | `DSR1` | 7.62B | ~4.7 GB | Compact distilled reasoning model | [Ollama Library](https://ollama.com/library/deepseek-r1:7b) |
+| `qwen3:8b` | `QWEN` | 8.19B | ~5.2 GB | Larger general reasoning comparison model | [Ollama Library](https://ollama.com/library/qwen3:8b) |
