@@ -1,0 +1,2 @@
+timestamp,question_id,model,model_alias,total_duration_s,generation_duration_s,output_tokens,tokens_per_sec,peak_vram_mb,completion_status,evidence_file
+2026-09-13 21:37:07,Q_CUSTOM,phi4-mini-reasoning,PHI,25.758,18.296,756,41.32,4127.0,Completed,data\responses\Q_CUSTOM_PHI.json
