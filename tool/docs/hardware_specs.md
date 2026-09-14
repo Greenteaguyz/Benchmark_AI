@@ -1,5 +1,5 @@
 # Hardware & Software Specifications Sheet
-*Generated on: 2026-09-14 10:34:35*  
+*Generated on: 2026-09-14 10:23:22*  
 *Conforms to: Student Internship Project Plan (Page 2 & 5: Computer information to record)*
 
 ---
@@ -14,7 +14,7 @@
 - **Available VRAM:** 7.96 GB (8151 MB)
 
 ```text
-Mon Sep 14 10:34:35 2026       
+Mon Sep 14 10:23:22 2026       
 +-----------------------------------------------------------------------------------------+
 | NVIDIA-SMI 616.92                 KMD Version: 616.92        CUDA UMD Version: 13.4     |
 +-----------------------------------------+------------------------+----------------------+
@@ -23,7 +23,7 @@ Mon Sep 14 10:34:35 2026
 |                                         |                        |               MIG M. |
 |=========================================+========================+======================|
 |   0  NVIDIA GeForce RTX 5060 ...  WDDM  |   00000000:01:00.0 Off |                  N/A |
-| N/A   57C    P2             20W /   72W |     263MiB /   8151MiB |      0%      Default |
+| N/A   52C    P2             20W /   80W |     142MiB /   8151MiB |      0%      Default |
 |                                         |                        |                  N/A |
 +-----------------------------------------+------------------------+----------------------+
 
@@ -46,9 +46,9 @@ Mon Sep 14 10:34:35 2026
 
 ## 5. Model Storage & Disk Space
 - **Storage Drive & Path:** `C:\Users\User\.ollama\models`
-- **Available Disk Space:** C: (84.07 GB free of 475.82 GB)
+- **Available Disk Space:** C: (84.1 GB free of 475.82 GB)
 
-## 6. Selected Models & Download Sizes (Page 2 Target)
+## 6. Selected Models & Download Sizes 
 | Package (Tag) | Alias | Parameters | Size (Disk) | Purpose in Benchmark | Official Link |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `phi4-mini-reasoning` | `PHI` | 3.84B | ~3.2 GB | Lightweight reasoning baseline for constrained hardware | [Ollama Library](https://ollama.com/library/phi4-mini-reasoning:latest) |

@@ -15,7 +15,10 @@ import shutil
 import subprocess
 from datetime import datetime
 
-OUTPUT_PATH = os.path.join("docs", "hardware_specs.md")
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR) if os.path.basename(CURRENT_DIR) == "tool" else CURRENT_DIR
+
+OUTPUT_PATH = os.path.join(PROJECT_ROOT, "docs", "hardware_specs.md")
 
 
 def run_cmd(cmd: list[str]) -> str:

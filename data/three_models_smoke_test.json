@@ -1,0 +1,50 @@
+[
+  {
+    "alias": "PHI",
+    "model": "phi4-mini-reasoning:latest",
+    "parameters": "3.84B",
+    "disk_size": "~3.2 GB",
+    "load_duration_s": 4.799,
+    "prompt_tokens": 66,
+    "eval_tokens": 445,
+    "eval_duration_s": 5.45,
+    "tokens_per_second": 81.67,
+    "peak_vram_mb": 3975,
+    "allocated_vram_mb": 3725,
+    "gpu_offload": "100.0% GPU (3.49 GB)",
+    "total_turnaround_s": 10.57,
+    "response_snippet": "<think> Okay, let's see. The problem says a farmer has 15 sheep, and all but 8 die. How many does the farmer have left? Hmm. The key here is understanding the phrase \"all but 8 die.\" Sometimes these tricky questions can be confusing because of the wo..."
+  },
+  {
+    "alias": "DSR1",
+    "model": "deepseek-r1:7b",
+    "parameters": "7.62B",
+    "disk_size": "~4.7 GB",
+    "load_duration_s": 5.874,
+    "prompt_tokens": 41,
+    "eval_tokens": 229,
+    "eval_duration_s": 3.63,
+    "tokens_per_second": 63.14,
+    "peak_vram_mb": 4887,
+    "allocated_vram_mb": 4637,
+    "gpu_offload": "100.0% GPU (4.42 GB)",
+    "total_turnaround_s": 9.61,
+    "response_snippet": "Sure, let's solve the problem step-by-step.  **Problem Statement:** A farmer has 15 sheep. All but 8 die. How many sheep does the farmer have left?  **Step 1: Understand the Total Number of Sheep** The farmer starts with **15 sheep**.  **Step 2: Inte..."
+  },
+  {
+    "alias": "QWEN",
+    "model": "qwen3:8b",
+    "parameters": "8.19B",
+    "disk_size": "~5.2 GB",
+    "load_duration_s": 5.883,
+    "prompt_tokens": 48,
+    "eval_tokens": 512,
+    "eval_duration_s": 9.87,
+    "tokens_per_second": 51.85,
+    "peak_vram_mb": 5719,
+    "allocated_vram_mb": 5469,
+    "gpu_offload": "100.0% GPU (5.2 GB)",
+    "total_turnaround_s": 16.03,
+    "response_snippet": "The farmer..."
+  }
+]

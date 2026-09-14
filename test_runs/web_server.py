@@ -504,7 +504,7 @@ app = Starlette(debug=True, routes=routes)
 if __name__ == "__main__":
     import uvicorn
     print("=" * 65)
-    print("  🚀 LLM Reasoning Benchmark Fast Web Server")
+    print("  [+] LLM Reasoning Benchmark Fast Web Server")
     print("  URL: http://localhost:8000")
     print("=" * 65)
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
