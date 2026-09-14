@@ -197,16 +197,43 @@ def is_model_installed(model_name: str, installed_tags: list[str]) -> bool:
     return False
 
 
-def evict_ollama_model(model_name: str) -> bool:
-    """Sends keep_alive: 0 to Ollama to release model from 8 GB VRAM."""
+def evict_ollama_model(model_name: str = None) -> bool:
+    """Sends keep_alive: 0 to Ollama to release model(s) from 8 GB VRAM."""
+    success = False
     try:
-        requests.post(
-            f"{OLLAMA_API_BASE}/api/generate",
-            json={"model": model_name, "keep_alive": 0},
-            timeout=4,
-        )
+        targets = set()
+        if model_name:
+            targets.add(model_name)
+            if ":" not in model_name:
+                targets.add(f"{model_name}:latest")
+            else:
+                targets.add(model_name.split(":")[0])
+
+        # Query active models currently in VRAM to ensure exact loaded tag is targeted
+        try:
+            r = requests.get(f"{OLLAMA_API_BASE}/api/ps", timeout=2)
+            if r.status_code == 200:
+                for m in r.json().get("models", []):
+                    name = m.get("name")
+                    if name:
+                        if not model_name or any(t in name or name in t for t in targets):
+                            targets.add(name)
+        except Exception:
+            pass
+
+        for target in targets:
+            try:
+                requests.post(
+                    f"{OLLAMA_API_BASE}/api/generate",
+                    json={"model": target, "keep_alive": 0},
+                    timeout=5,
+                )
+                success = True
+            except Exception:
+                pass
+
         get_loaded_models.clear()
-        return True
+        return success
     except Exception:
         return False
 
@@ -493,14 +520,23 @@ def render_benchmark_control_panel():
 
         # Automatic VRAM eviction if user switches models to avoid 8GB VRAM saturation
         if st.session_state.get("last_loaded_model") and st.session_state["last_loaded_model"] != selected_model:
-            evict_ollama_model(st.session_state["last_loaded_model"])
+            old_model = st.session_state["last_loaded_model"]
+            with st.spinner(f"Releasing `{old_model}` from VRAM..."):
+                evict_ollama_model(old_model)
             st.session_state["last_loaded_model"] = selected_model
+            # Clear previous model's output card so screen doesn't stay stuck on old telemetry
+            st.session_state["latest_result"] = None
             if auto_load and is_model_installed(selected_model, installed_tags):
-                load_model_into_vram(selected_model)
+                with st.spinner(f"Pre-loading `{selected_model}` into VRAM..."):
+                    ok, msg = load_model_into_vram(selected_model)
+                    if not ok:
+                        st.error(f"⚠️ Failed to auto-load `{selected_model}` into VRAM: {msg}")
+            st.rerun()
         elif not st.session_state.get("last_loaded_model"):
             st.session_state["last_loaded_model"] = selected_model
             if auto_load and is_model_installed(selected_model, installed_tags):
-                load_model_into_vram(selected_model)
+                with st.spinner(f"Pre-loading `{selected_model}` into VRAM..."):
+                    load_model_into_vram(selected_model)
 
     with col_m2:
         m_info = REQUIRED_MODELS[selected_model]
@@ -582,8 +618,12 @@ def render_benchmark_control_panel():
             f"<span class='badge badge-amber'>{q_data['difficulty']}</span>",
             unsafe_allow_html=True,
         )
-        st.session_state["benchmark_frozen_prompt_area"] = prompt_text
-        active_prompt = st.text_area("Exact Prompt Wording (Frozen):", value=prompt_text, height=100, key="benchmark_frozen_prompt_area")
+        active_prompt = st.text_area(
+            "Exact Prompt Wording (Frozen):",
+            value=prompt_text,
+            height=100,
+            key=f"benchmark_frozen_prompt_{selected_qid}",
+        )
         current_qid = selected_qid
     else:
         current_qid = st.text_input("Assign Question ID (e.g. Q_TEST01):", value="Q_TEST01", key="benchmark_custom_qid_input")
@@ -661,6 +701,7 @@ def render_benchmark_control_panel():
                 },
             }
 
+            inference_success = False
             try:
                 full_raw_response = ""
                 eval_count = 0
@@ -669,76 +710,122 @@ def render_benchmark_control_panel():
 
                 with requests.post(f"{OLLAMA_API_BASE}/api/generate", json=req_payload, stream=True, timeout=300) as resp:
                     if resp.status_code == 200:
+                        in_thinking = False
                         for line in resp.iter_lines():
                             if line:
                                 chunk = json.loads(line)
+                                th = chunk.get("thinking")
                                 token = chunk.get("response", "")
-                                full_raw_response += token
-                                stream_text_box.markdown(full_raw_response + " ▌")
-                                
+
+                                if th:
+                                    if not in_thinking:
+                                        full_raw_response += "<think>\n"
+                                        in_thinking = True
+                                    full_raw_response += th
+                                    stream_text_box.markdown(full_raw_response + " ▌")
+                                elif token:
+                                    if in_thinking:
+                                        full_raw_response += "\n</think>\n\n"
+                                        in_thinking = False
+                                    full_raw_response += token
+                                    stream_text_box.markdown(full_raw_response + " ▌")
+
                                 if chunk.get("done", False):
+                                    if in_thinking:
+                                        full_raw_response += "\n</think>\n\n"
+                                        in_thinking = False
                                     eval_count = chunk.get("eval_count", 0)
                                     eval_duration_ns = chunk.get("eval_duration", 0)
                                     done_reason = chunk.get("done_reason", "stop")
                                     completion_status = "Completed" if done_reason == "stop" else done_reason
 
-                        total_duration_sec = round(time.time() - start_time, 3)
-                        end_vram = get_peak_vram_mb()
-                        peak_vram = max(start_vram, end_vram)
-                        eval_duration_sec = round(eval_duration_ns / 1e9, 3) if eval_duration_ns else total_duration_sec
-                        tokens_per_sec = round(eval_count / eval_duration_sec, 2) if eval_duration_sec > 0 else 0.0
-
                         # Instantly clear raw stream placeholder and status
                         stream_text_box.empty()
                         stream_status_box.empty()
 
-                        # Parse thought and verified answer
-                        thought, final_ans = parse_reasoning_and_answer(full_raw_response)
+                        if not full_raw_response.strip():
+                            stream_status_box.error(
+                                f"⚠️ `{selected_model}` produced an empty response. "
+                                "This typically happens if the model failed to allocate VRAM for inference. "
+                                "Please click **'🧹 Free VRAM'** in the control panel to release memory and re-run."
+                            )
+                        else:
+                            total_duration_sec = round(time.time() - start_time, 3)
+                            end_vram = get_peak_vram_mb()
+                            peak_vram = max(start_vram, end_vram)
+                            eval_duration_sec = round(eval_duration_ns / 1e9, 3) if eval_duration_ns else total_duration_sec
+                            tokens_per_sec = round(eval_count / eval_duration_sec, 2) if eval_duration_sec > 0 else 0.0
 
-                        # Automatic Compliant Storage
-                        saved_filepath = save_response_artifact(current_qid, selected_model, active_prompt, full_raw_response, active_target_dir)
+                            # Parse thought and verified answer
+                            thought, final_ans = parse_reasoning_and_answer(full_raw_response)
 
-                        # Log to CSV (Page 6 requirement)
-                        log_record = {
-                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "question_id": current_qid,
-                            "model": selected_model,
-                            "model_alias": m_info["alias"],
-                            "total_duration_s": total_duration_sec,
-                            "generation_duration_s": eval_duration_sec,
-                            "output_tokens": eval_count,
-                            "tokens_per_sec": tokens_per_sec,
-                            "peak_vram_mb": peak_vram,
-                            "completion_status": completion_status,
-                            "evidence_file": saved_filepath,
-                        }
-                        log_comparison_csv(log_record, active_csv_path)
+                            # Automatic Compliant Storage
+                            saved_filepath = save_response_artifact(current_qid, selected_model, active_prompt, full_raw_response, active_target_dir)
 
-                        # Store latest result in session state
-                        st.session_state["latest_result"] = {
-                            "question_id": current_qid,
-                            "model": selected_model,
-                            "model_alias": m_info["alias"],
-                            "prompt": active_prompt,
-                            "raw_response": full_raw_response,
-                            "thought": thought,
-                            "final_ans": final_ans,
-                            "total_duration_sec": total_duration_sec,
-                            "eval_duration_sec": eval_duration_sec,
-                            "eval_count": eval_count,
-                            "tokens_per_sec": tokens_per_sec,
-                            "peak_vram": peak_vram,
-                            "completion_status": completion_status,
-                            "saved_filepath": saved_filepath,
-                            "temperature": active_temp,
-                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        }
+                            # Log to CSV (Page 6 requirement)
+                            log_record = {
+                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "question_id": current_qid,
+                                "model": selected_model,
+                                "model_alias": m_info["alias"],
+                                "total_duration_s": total_duration_sec,
+                                "generation_duration_s": eval_duration_sec,
+                                "output_tokens": eval_count,
+                                "tokens_per_sec": tokens_per_sec,
+                                "peak_vram_mb": peak_vram,
+                                "completion_status": completion_status,
+                                "evidence_file": saved_filepath,
+                            }
+                            log_comparison_csv(log_record, active_csv_path)
+
+                            # Store latest result in session state
+                            st.session_state["latest_result"] = {
+                                "question_id": current_qid,
+                                "model": selected_model,
+                                "model_alias": m_info["alias"],
+                                "prompt": active_prompt,
+                                "raw_response": full_raw_response,
+                                "thought": thought,
+                                "final_ans": final_ans,
+                                "total_duration_sec": total_duration_sec,
+                                "eval_duration_sec": eval_duration_sec,
+                                "eval_count": eval_count,
+                                "tokens_per_sec": tokens_per_sec,
+                                "peak_vram": peak_vram,
+                                "completion_status": completion_status,
+                                "saved_filepath": saved_filepath,
+                                "temperature": active_temp,
+                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            }
+                            inference_success = True
 
                     else:
-                        stream_status_box.error(f"Inference error {resp.status_code}: {resp.text}")
+                        err_text = resp.text
+                        if "out of memory" in err_text.lower() or "cuda" in err_text.lower() or resp.status_code == 500:
+                            stream_status_box.error(
+                                f"⚠️ **GPU Memory Allocation Failed ({resp.status_code})**: {err_text}\n\n"
+                                f"Model `{selected_model}` could not fit into VRAM. "
+                                "Click **'🧹 Free VRAM'** in the control panel to release memory, close heavy background apps, and try again."
+                            )
+                        else:
+                            stream_status_box.error(f"Inference error {resp.status_code}: {err_text}")
 
+            except requests.exceptions.Timeout:
+                stream_status_box.error(
+                    f"⏱️ Inference timed out while communicating with `{selected_model}`. "
+                    "The model may be thrashing between system RAM and VRAM. Try freeing VRAM and rerunning."
+                )
+            except requests.exceptions.ConnectionError:
+                stream_status_box.error("🔌 Lost connection to Ollama. Please check if the Ollama service is running.")
             except Exception as err:
                 stream_status_box.error(f"Execution failed: {err}. As per guidelines, technical failures must be documented.")
+
+            # Trigger app-level rerun so tables and inspectors re-read latest records immediately
+            if inference_success:
+                try:
+                    st.rerun(scope="app")
+                except TypeError:
+                    st.rerun()
 
     # Render persistent & latest benchmark result immediately in-place (0ms delay)
     if st.session_state.get("latest_result"):
@@ -774,7 +861,12 @@ render_benchmark_control_panel()
 
 # --- 6. Inspect Saved Evidence & Comparison Log ---
 st.divider()
-st.subheader("🔍 Artifact Inspector & Comparison Log")
+col_insp_title, col_insp_btn = st.columns([5, 1])
+with col_insp_title:
+    st.subheader("🔍 Artifact Inspector & Comparison Log")
+with col_insp_btn:
+    if st.button("🔄 Refresh Logs", key="manual_refresh_logs_btn", use_container_width=True, help="Force re-read comparison logs and artifacts from disk"):
+        st.rerun()
 
 tab_test, tab_official = st.tabs(["🧪 Test Runs (`test_runs/`)", "📋 Official Dataset (`data/`)"])
 

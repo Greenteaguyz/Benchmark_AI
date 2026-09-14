@@ -9,3 +9,17 @@ timestamp,question_id,model,model_alias,total_duration_s,generation_duration_s,o
 2026-09-13 22:46:50,Q01,phi4-mini-reasoning,PHI,22.013,19.827,700,35.31,4098.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
 2026-09-13 22:49:45,Q01,phi4-mini-reasoning,PHI,28.993,26.861,938,34.92,4088.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
 2026-09-14 21:59:17,Q01,phi4-mini-reasoning,PHI,40.449,34.902,97,2.78,0.0,Completed,/home/ratanakvichea/Benchmark_AI/test_runs/responses/Q01_PHI.json
+2026-09-14 11:33:41,Q01,phi4-mini-reasoning,PHI,16.02,9.066,700,77.21,3785.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
+2026-09-14 11:50:43,Q01,phi4-mini-reasoning,PHI,15.711,9.081,700,77.08,3782.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
+2026-09-14 11:52:29,Q01,qwen3:8b,QWEN,24.277,16.408,863,52.6,5526.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_QWEN.json
+2026-09-14 12:02:16,Q01,qwen3:8b,QWEN,25.554,17.046,863,50.63,5538.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_QWEN.json
+2026-09-15 00:11:38,Q01,phi4-mini-reasoning,PHI,14.458,12.149,700,57.62,3919.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
+2026-09-15 00:12:47,Q01,phi4-mini-reasoning,PHI,14.643,12.419,700,56.37,3921.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
+2026-09-15 00:14:07,Q01,phi4-mini-reasoning,PHI,11.526,9.309,700,75.2,3922.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
+2026-09-15 00:48:27,Q01,qwen3:8b,QWEN,13.731,11.591,642,55.39,5691.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_QWEN.json
+2026-09-15 00:49:48,Q01,phi4-mini-reasoning,PHI,11.363,9.143,700,76.56,3947.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
+2026-09-15 00:52:44,Q01,phi4-mini-reasoning,PHI,11.403,9.152,700,76.49,3947.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
+2026-09-15 01:09:10,Q01,deepseek-r1:7b,DSR1,12.621,4.806,260,54.1,4859.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_DSR1.json
+2026-09-15 01:10:58,Q01,qwen3:8b,QWEN,19.145,16.859,863,51.19,5691.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_QWEN.json
+2026-09-15 01:11:57,Q01,phi4-mini-reasoning,PHI,11.449,9.243,700,75.73,3947.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
+2026-09-15 01:13:38,Q01,deepseek-r1:7b,DSR1,6.793,4.663,260,55.76,4859.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_DSR1.json

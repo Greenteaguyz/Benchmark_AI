@@ -299,7 +299,17 @@ async def api_vram_evict(request):
         return JSONResponse({"success": False, "error": "Missing model"}, status_code=400)
 
     try:
-        requests.post(f"{OLLAMA_API_BASE}/api/generate", json={"model": model_name, "keep_alive": 0}, timeout=5)
+        targets = [model_name]
+        if ":" not in model_name:
+            targets.append(f"{model_name}:latest")
+        else:
+            targets.append(model_name.split(":")[0])
+
+        for t in targets:
+            try:
+                requests.post(f"{OLLAMA_API_BASE}/api/generate", json={"model": t, "keep_alive": 0}, timeout=5)
+            except Exception:
+                pass
         return JSONResponse({"success": True, "message": f"Evicted {model_name} from VRAM"})
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -372,19 +382,41 @@ async def api_generate_stream(request):
                     yield f"data: {json.dumps({'error': f'Ollama error {resp.status_code}: {resp.text}'})}\n\n"
                     return
 
+                in_thinking = False
                 for line in resp.iter_lines():
                     if line:
                         chunk = json.loads(line)
+                        th = chunk.get("thinking")
                         token = chunk.get("response", "")
-                        full_response += token
-                        yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
+
+                        if th:
+                            if not in_thinking:
+                                full_response += "<think>\n"
+                                in_thinking = True
+                                yield f"data: {json.dumps({'token': '<think>\n', 'done': False})}\n\n"
+                            full_response += th
+                            yield f"data: {json.dumps({'token': th, 'done': False})}\n\n"
+                        elif token:
+                            if in_thinking:
+                                full_response += "\n</think>\n\n"
+                                in_thinking = False
+                                yield f"data: {json.dumps({'token': '\n</think>\n\n', 'done': False})}\n\n"
+                            full_response += token
+                            yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
                         await asyncio.sleep(0)  # Yield control to event loop
 
                         if chunk.get("done", False):
+                            if in_thinking:
+                                full_response += "\n</think>\n\n"
+                                in_thinking = False
                             eval_count = chunk.get("eval_count", 0)
                             eval_duration_ns = chunk.get("eval_duration", 0)
                             done_reason = chunk.get("done_reason", "stop")
                             completion_status = "Completed" if done_reason == "stop" else done_reason
+
+            if not full_response.strip():
+                yield f"data: {json.dumps({'error': f'Model {model_name} produced an empty response. Free VRAM and retry.'})}\n\n"
+                return
 
             total_duration_sec = round(time.time() - start_time, 3)
             end_vram = get_peak_vram_mb()
