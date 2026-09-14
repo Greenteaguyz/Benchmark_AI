@@ -8,3 +8,4 @@ timestamp,question_id,model,model_alias,total_duration_s,generation_duration_s,o
 2026-09-13 22:43:08,Q02,phi4-mini-reasoning,PHI,17.388,15.139,627,41.42,4096.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q02_PHI.json
 2026-09-13 22:46:50,Q01,phi4-mini-reasoning,PHI,22.013,19.827,700,35.31,4098.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
 2026-09-13 22:49:45,Q01,phi4-mini-reasoning,PHI,28.993,26.861,938,34.92,4088.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
+2026-09-14 21:59:17,Q01,phi4-mini-reasoning,PHI,40.449,34.902,97,2.78,0.0,Completed,/home/ratanakvichea/Benchmark_AI/test_runs/responses/Q01_PHI.json

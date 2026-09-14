@@ -1,0 +1,7 @@
+{
+  "question_id": "Q01",
+  "model": "phi4-mini-reasoning",
+  "prompt": "Solve for x: 3x + 12 = 30. Show each step of your calculation clearly and state the final numerical value of x.",
+  "response": "Step 1: Subtract 12 from both sides to isolate terms with 'x' on one side.\n3x + 12 - 12 = 30 - 12\nThis simplifies as:\n3x = 18\n\nStep 2: Divide by 3 (the coefficient for the variable x) in order to solve for it. \n(3x)/3 = 18/3\nWhich gives us our final answer of 'x':\nx = 6",
+  "timestamp": "2026-09-14T14:59:17Z"
+}

@@ -582,6 +582,7 @@ def render_benchmark_control_panel():
             f"<span class='badge badge-amber'>{q_data['difficulty']}</span>",
             unsafe_allow_html=True,
         )
+        st.session_state["benchmark_frozen_prompt_area"] = prompt_text
         active_prompt = st.text_area("Exact Prompt Wording (Frozen):", value=prompt_text, height=100, key="benchmark_frozen_prompt_area")
         current_qid = selected_qid
     else:
