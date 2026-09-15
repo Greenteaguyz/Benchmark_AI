@@ -58,14 +58,65 @@ def run_cmd(cmd):
     except Exception as e:
         return f"Error: {e}"
 
+def wait_for_model_evicted(model_name: str, timeout: float = 20.0) -> bool:
+    """Polls Ollama /api/ps until a model is fully released from VRAM.
+
+    Ollama's keep_alive: 0 request returns before the model is actually
+    unmapped from GPU memory. Loading the next model during that window can
+    exceed the 8 GB VRAM budget and crash the runner.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            loaded = [m.get("name", "") for m in requests.get(f"{OLLAMA_API}/api/ps").json().get("models", [])]
+        except Exception:
+            loaded = []
+        if not any(model_name == m or m.startswith(f"{model_name}:") for m in loaded):
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def evict_all_models():
-    """Ensure no models remain in VRAM."""
-    ps_res = requests.get(f"{OLLAMA_API}/api/ps").json().get("models", [])
+    """Ensure no models remain in VRAM, waiting for each to be released."""
+    try:
+        ps_res = requests.get(f"{OLLAMA_API}/api/ps").json().get("models", [])
+    except Exception:
+        return
+
     for m in ps_res:
         model_name = m.get("name")
+        if not model_name:
+            continue
         print(f"  Evicting {model_name} from VRAM...")
-        requests.post(f"{OLLAMA_API}/api/generate", json={"model": model_name, "keep_alive": 0})
-    time.sleep(1)
+        try:
+            requests.post(f"{OLLAMA_API}/api/generate", json={"model": model_name, "keep_alive": 0}, timeout=5)
+            wait_for_model_evicted(model_name)
+        except Exception as e:
+            print(f"  Warning: evict failed for {model_name}: {e}")
+
+
+def run_generate_with_retry(payload: dict, timeout: int = 180, attempts: int = 4):
+    """Calls /api/generate, retrying transient connection drops.
+
+    RemoteDisconnected / ConnectionError means the Ollama runner was killed
+    (usually VRAM exhaustion on the 8 GB GPU). We clear VRAM, wait, and retry.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.post(f"{OLLAMA_API}/api/generate", json=payload, timeout=timeout)
+            if resp.status_code != 200:
+                print(f"  ERROR: {resp.status_code} - {resp.text}")
+            return resp
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
+            print(f"  Connection dropped ({type(e).__name__}) — likely runner crash on 8 GB VRAM OOM. "
+                  f"Clearing VRAM and retrying ({attempt}/{attempts})...")
+            evict_all_models()
+            time.sleep(2 * attempt)
+        except Exception as e:
+            print(f"  ERROR during request: {e}")
+            return None
+    return None
 
 def get_vram_used_mb():
     try:
@@ -106,7 +157,12 @@ def main():
 
         print(f"  Running common prompt on {model_name}...")
         start_time = time.time()
-        resp = requests.post(f"{OLLAMA_API}/api/generate", json=payload, timeout=180)
+        resp = run_generate_with_retry(payload, timeout=180)
+
+        if resp is None:
+            print(f"  FAILED to run {model_name} after retries (runner crash / VRAM OOM). Skipping.")
+            continue
+
         elapsed = time.time() - start_time
 
         if resp.status_code != 200:

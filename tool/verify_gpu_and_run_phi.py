@@ -17,6 +17,58 @@ def run_cmd(cmd):
     except Exception as e:
         return f"Error: {e}"
 
+
+def wait_for_model_evicted(model_name: str, timeout: float = 20.0) -> bool:
+    """Polls Ollama /api/ps until a model is fully released from VRAM."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            loaded = [m.get("name", "") for m in requests.get(f"{OLLAMA_API}/api/ps").json().get("models", [])]
+        except Exception:
+            loaded = []
+        if not any(model_name == m or m.startswith(f"{model_name}:") for m in loaded):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def evict_all_models():
+    """Evicts all resident models, waiting for actual VRAM release."""
+    try:
+        ps_res = requests.get(f"{OLLAMA_API}/api/ps").json().get("models", [])
+    except Exception:
+        return
+    for m in ps_res:
+        model_name = m.get("name")
+        if not model_name:
+            continue
+        try:
+            requests.post(f"{OLLAMA_API}/api/generate", json={"model": model_name, "keep_alive": 0}, timeout=5)
+            wait_for_model_evicted(model_name)
+        except Exception:
+            pass
+
+
+def run_generate_with_retry(payload: dict, timeout: int = 120, attempts: int = 4):
+    """Calls /api/generate, retrying transient connection drops.
+
+    RemoteDisconnected / ConnectionError means the Ollama runner was killed
+    (usually VRAM exhaustion on the 8 GB GPU). We clear VRAM and retry.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.post(f"{OLLAMA_API}/api/generate", json=payload, timeout=timeout)
+            return resp
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
+            print(f"  Connection dropped ({type(e).__name__}) — likely runner crash on 8 GB VRAM OOM. "
+                  f"Clearing VRAM and retrying ({attempt}/{attempts})...")
+            evict_all_models()
+            time.sleep(2 * attempt)
+        except Exception as e:
+            print(f"Error during request: {e}")
+            return None
+    return None
+
 def main():
     print("=" * 60)
     print("STEP 1: Verify Ollama Service & Models")
@@ -36,6 +88,7 @@ def main():
     print("\n" + "=" * 60)
     print(f"STEP 3: Running Inference on {MODEL} with Reasoning Test")
     print("=" * 60)
+    evict_all_models()
     prompt = (
         "Solve this step-by-step:\n"
         "A farmer has 15 sheep. All but 8 die. How many sheep does the farmer have left?\n"
@@ -52,8 +105,12 @@ def main():
     }
 
     start_time = time.time()
-    resp = requests.post(f"{OLLAMA_API}/api/generate", json=payload, timeout=120)
+    resp = run_generate_with_retry(payload, timeout=120)
     elapsed = time.time() - start_time
+
+    if resp is None:
+        print("Failed to run inference after retries (runner crash / VRAM OOM). Free VRAM and retry.")
+        return
 
     if resp.status_code != 200:
         print(f"Error during inference: {resp.status_code} - {resp.text}")
