@@ -6,20 +6,49 @@ can never be merged onto one line again.
 """
 import contextlib
 import csv
-import fcntl
 import io
 import os
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 
 @contextlib.contextmanager
 def _locked(lock_path: str):
     f = open(lock_path, "a+", encoding="utf-8")
     try:
-        fcntl.flock(f, fcntl.LOCK_EX)
+        if fcntl:
+            fcntl.flock(f, fcntl.LOCK_EX)
+        elif msvcrt:
+            f.seek(0)
+            if f.tell() == 0 and os.path.getsize(lock_path) == 0:
+                f.write(" ")
+                f.flush()
+            f.seek(0)
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+            except OSError:
+                pass
         yield
     finally:
-        fcntl.flock(f, fcntl.LOCK_UN)
-        f.close()
+        try:
+            if fcntl:
+                fcntl.flock(f, fcntl.LOCK_UN)
+            elif msvcrt:
+                f.seek(0)
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+        finally:
+            f.close()
 
 
 def _record_bytes(row: dict, fieldnames) -> bytes:
