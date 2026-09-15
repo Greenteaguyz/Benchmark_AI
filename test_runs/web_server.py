@@ -542,12 +542,15 @@ async def api_artifact(request):
     fallback_dir = TEST_RESPONSES_DIR if mode == "official" else OFFICIAL_RESPONSES_DIR
     csv_path = OFFICIAL_LOG_CSV_PATH if mode == "official" else TEST_LOG_CSV_PATH
 
-    base_fn = os.path.basename(filename)
+    # Strictly search only within primary_dir to avoid cross-contamination
     candidates = [
         os.path.join(primary_dir, base_fn),
-        os.path.join(fallback_dir, base_fn),
-        filename if os.path.isabs(filename) else os.path.join(PROJECT_ROOT, filename),
     ]
+    if os.path.isabs(filename):
+        norm_fn = os.path.normpath(filename)
+        norm_prim = os.path.normpath(primary_dir)
+        if norm_fn.startswith(norm_prim):
+            candidates.append(filename)
 
     for fp in candidates:
         if fp and os.path.exists(fp) and os.path.isfile(fp):

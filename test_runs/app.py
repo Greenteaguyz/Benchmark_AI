@@ -1178,27 +1178,28 @@ def format_vram_telemetry(row: dict) -> str:
 
 
 def resolve_evidence_path(evidence_file: str, qid: str, alias: str, responses_dir: str):
-    """Resolves JSON artifact path across Windows/Linux paths, local directories, and fallbacks."""
-    if evidence_file and os.path.isfile(evidence_file):
-        return evidence_file
-
-    search_dirs = [responses_dir, TEST_RESPONSES_DIR, OFFICIAL_RESPONSES_DIR]
-
-    # Extract basename from Linux or Windows paths
+    """Resolves JSON artifact path strictly within the designated responses directory."""
+    # 1. If evidence_file is specified, check directly inside responses_dir
     if evidence_file:
-        base = os.path.basename(evidence_file.replace("\\", "/"))
-        for d in search_dirs:
-            cand = os.path.join(d, base)
-            if os.path.isfile(cand):
-                return cand
+        clean_ev = str(evidence_file).replace("\\", "/")
+        base = os.path.basename(clean_ev)
+        cand = os.path.join(responses_dir, base)
+        if os.path.isfile(cand):
+            return cand
 
-    # Standard fallback {qid}_{alias}.json
+        # If evidence_file is an absolute path, only accept if it actually resides in responses_dir
+        if os.path.isabs(evidence_file) and os.path.isfile(evidence_file):
+            norm_ev = os.path.normpath(evidence_file)
+            norm_resp = os.path.normpath(responses_dir)
+            if norm_ev.startswith(norm_resp):
+                return evidence_file
+
+    # 2. Standard fallback {qid}_{alias}.json strictly in responses_dir
     if qid and alias:
         fallback = f"{qid}_{alias}.json"
-        for d in search_dirs:
-            cand = os.path.join(d, fallback)
-            if os.path.isfile(cand):
-                return cand
+        cand = os.path.join(responses_dir, fallback)
+        if os.path.isfile(cand):
+            return cand
 
     return None
 
@@ -1408,19 +1409,18 @@ def render_model_comparison(df: pd.DataFrame, responses_dir: str, tab_key: str):
     if not df.empty and "question_id" in df.columns:
         available_qs.update(df["question_id"].dropna().unique())
 
-    # Also check responses directories
-    for d in [responses_dir, TEST_RESPONSES_DIR, OFFICIAL_RESPONSES_DIR]:
-        if os.path.exists(d):
-            for fn in os.listdir(d):
-                if fn.endswith(".json") and "_" in fn:
-                    qid_part = fn.split("_")[0]
-                    available_qs.add(qid_part)
+    # Also check responses directory strictly
+    if os.path.exists(responses_dir):
+        for fn in os.listdir(responses_dir):
+            if fn.endswith(".json") and "_" in fn:
+                qid_part = fn.split("_")[0]
+                available_qs.add(qid_part)
 
     # Sort available questions
     sorted_qs = sorted(list(available_qs))
 
     if not sorted_qs:
-        st.info("No questions have been run yet. Execute benchmark runs above to compare models.")
+        st.info("No questions have been run yet in this mode. Execute benchmark runs above to compare models.")
         return
 
     selected_comp_qid = st.selectbox(
@@ -1452,7 +1452,7 @@ def render_model_comparison(df: pd.DataFrame, responses_dir: str, tab_key: str):
                 if not matches.empty:
                     matched_row = matches.iloc[-1].to_dict()
 
-            # Look up artifact
+            # Look up artifact strictly in responses_dir
             art_data = None
             if matched_row:
                 art_data, _ = load_evidence_artifact(matched_row, responses_dir)
@@ -1481,7 +1481,8 @@ def render_model_comparison(df: pd.DataFrame, responses_dir: str, tab_key: str):
                 else:
                     st.caption("ℹ️ Telemetry logged; response file not on disk.")
             else:
-                st.info(f"⚪ No run for **{alias}** yet.")
+                is_official = responses_dir == OFFICIAL_RESPONSES_DIR
+                st.info(f"⚪ No {'official deliverable' if is_official else 'test run'} for **{alias}** yet.")
 
 
 def render_section_tabs(df: pd.DataFrame, responses_dir: str, tab_key: str, download_name: str):
@@ -1504,20 +1505,29 @@ def render_section_tabs(df: pd.DataFrame, responses_dir: str, tab_key: str, down
         render_model_comparison(df, responses_dir, tab_key)
 
 
-tab_test, tab_official = st.tabs(["🧪 Test Runs (`test_runs/`)", "📋 Official Dataset (`data/`)"])
+# Dynamically synchronize Section 6 with active sidebar destination by default
+default_ds_idx = 0 if is_test_mode else 1
+selected_dataset = st.radio(
+    "📁 Dataset View Mode",
+    ["🧪 Test Runs (`test_runs/`)", "📋 Official Dataset (`data/`)"],
+    index=default_ds_idx,
+    horizontal=True,
+    key=f"active_ds_view_{is_test_mode}",
+    help="Synchronizes automatically with the sidebar storage destination, or toggle manually."
+)
 
-with tab_test:
+if "Test" in selected_dataset:
     if os.path.exists(TEST_LOG_CSV_PATH):
         df_test = pd.read_csv(TEST_LOG_CSV_PATH, on_bad_lines="warn")
         render_section_tabs(df_test, TEST_RESPONSES_DIR, "test", "test_comparison_log.csv")
     else:
         st.info("No test comparison log found yet.")
-
-with tab_official:
+else:
     if os.path.exists(OFFICIAL_LOG_CSV_PATH):
         df_off = pd.read_csv(OFFICIAL_LOG_CSV_PATH, on_bad_lines="warn")
         render_section_tabs(df_off, OFFICIAL_RESPONSES_DIR, "official", "official_comparison_log.csv")
     else:
-        st.info("No official runs logged yet. Switch to 'Official Benchmark Mode' when ready to collect the 45 deliverables.")
+        st.info("No official runs logged yet. Switch to 'Official Benchmark Mode' in the sidebar when ready to collect the 45 deliverables.")
+
 
 
