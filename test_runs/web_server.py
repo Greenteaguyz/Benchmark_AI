@@ -539,8 +539,9 @@ async def api_artifact(request):
     mode = request.query_params.get("mode", "test")
     filename = request.query_params.get("file", "").strip()
     primary_dir = OFFICIAL_RESPONSES_DIR if mode == "official" else TEST_RESPONSES_DIR
-    fallback_dir = TEST_RESPONSES_DIR if mode == "official" else OFFICIAL_RESPONSES_DIR
     csv_path = OFFICIAL_LOG_CSV_PATH if mode == "official" else TEST_LOG_CSV_PATH
+
+    base_fn = os.path.basename(filename)
 
     # Strictly search only within primary_dir to avoid cross-contamination
     candidates = [
