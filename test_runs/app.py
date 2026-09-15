@@ -349,6 +349,8 @@ if "latest_result" not in st.session_state:
     st.session_state["latest_result"] = None
 if "last_loaded_model" not in st.session_state:
     st.session_state["last_loaded_model"] = None
+if "active_selected_model" not in st.session_state:
+    st.session_state["active_selected_model"] = list(REQUIRED_MODELS.keys())[0]
 
 
 def get_response_filename(qid: str, model_name: str) -> str:
@@ -696,14 +698,19 @@ def render_benchmark_control_panel():
                 status = "⚠️ Missing"
             return f"{m_key} ({alias}) — {status}"
 
+        model_options = list(REQUIRED_MODELS.keys())
+        saved_model = st.session_state.get("active_selected_model")
+        default_idx = model_options.index(saved_model) if saved_model in model_options else 0
+
         selected_model = st.selectbox(
             "1. Select Active Model",
-            list(REQUIRED_MODELS.keys()),
-            index=0,
+            model_options,
+            index=default_idx,
             format_func=format_model_option,
             key="active_model_selectbox",
             help="Page 2 rule: Keep only one model loaded during each measurement."
         )
+        st.session_state["active_selected_model"] = selected_model
 
         auto_load = st.checkbox(
             "⚡ Auto-load into VRAM on switch",

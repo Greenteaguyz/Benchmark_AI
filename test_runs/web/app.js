@@ -480,15 +480,19 @@ function populateModelSelector() {
   DOM.modelSelect.innerHTML = '';
   const modelKeys = Object.keys(state.models);
 
-  modelKeys.forEach((mKey, idx) => {
+  const savedModel = localStorage.getItem('bench_selected_model');
+  if (savedModel && state.models[savedModel]) {
+    state.selectedModel = savedModel;
+  } else if (!state.selectedModel && modelKeys.length > 0) {
+    state.selectedModel = modelKeys[0];
+  }
+
+  modelKeys.forEach((mKey) => {
     const info = state.models[mKey];
     const opt = document.createElement('option');
     opt.value = mKey;
     opt.innerText = `${mKey} (${info.alias})`;
     DOM.modelSelect.appendChild(opt);
-    if (idx === 0 && !state.selectedModel) {
-      state.selectedModel = mKey;
-    }
   });
 
   DOM.modelSelect.value = state.selectedModel;
@@ -604,6 +608,9 @@ DOM.pullModelBtn.addEventListener('click', async () => {
 
 DOM.modelSelect.addEventListener('change', async () => {
   state.selectedModel = DOM.modelSelect.value;
+  try {
+    localStorage.setItem('bench_selected_model', state.selectedModel);
+  } catch (e) {}
   updateModelControls();
 
   if (DOM.autoLoadVramCheckbox.checked && isModelInstalled(state.selectedModel) && !isModelInVram(state.selectedModel)) {

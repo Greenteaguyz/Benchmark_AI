@@ -1,3 +1,10 @@
 timestamp,question_id,model,model_alias,total_duration_s,generation_duration_s,output_tokens,tokens_per_sec,peak_vram_gb,completion_status,evidence_file
 2026-09-14T10:52:15,Q01,Phi 4 Mini Reasoning,PHI,14.413,9.218,700,75.94,3.90,Completed,data/responses/Q01_PHI.json
 2026-09-14T15:25:16,Q01,Phi 4 Mini Reasoning,PHI,42.892,24.722,97,3.92,0.0,Completed,/home/ratanakvichea/Benchmark_AI/data/responses/Q01_PHI.json
+2026-09-15 12:20:31,Q01,phi4-mini-reasoning,PHI,11.467,9.202,700,76.07,3997.0,Completed,C:\Users\User\Downloads\AI_Project\data\responses\Q01_PHI.json
+2026-09-15 12:22:08,Q02,phi4-mini-reasoning,PHI,12.655,8.358,627,75.02,3997.0,Completed,C:\Users\User\Downloads\AI_Project\data\responses\Q02_PHI.json
+2026-09-15 12:23:39,Q03,phi4-mini-reasoning,PHI,18.009,13.73,1024,74.58,3997.0,length,C:\Users\User\Downloads\AI_Project\data\responses\Q03_PHI.json
+2026-09-15 12:25:44,Q04,phi4-mini-reasoning,PHI,20.224,13.553,1024,75.56,3997.0,length,C:\Users\User\Downloads\AI_Project\data\responses\Q04_PHI.json
+2026-09-15 12:30:10,Q05,phi4-mini-reasoning,PHI,20.762,13.751,1024,74.47,3997.0,length,C:\Users\User\Downloads\AI_Project\data\responses\Q05_PHI.json
+2026-09-15 12:31:18,Q05,phi4-mini-reasoning,PHI,15.861,13.697,1024,74.76,3998.0,length,C:\Users\User\Downloads\AI_Project\data\responses\Q05_PHI.json
+2026-09-15 12:33:33,Q05,phi4-mini-reasoning,PHI,17.843,13.58,1024,75.41,3997.0,length,C:\Users\User\Downloads\AI_Project\data\responses\Q05_PHI.json
