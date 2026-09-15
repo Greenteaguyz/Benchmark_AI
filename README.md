@@ -175,19 +175,30 @@ function doPost(e) {
     const data = JSON.parse(e.postData.contents);
 
     const modelKey = (data.model_alias || data.model || "Unknown").toString().toUpperCase();
+
+    const fmtNum = function (v) {
+      const n = Number(v);
+      if (isNaN(n)) return v;
+      return (Math.round(n * 100) / 100).toString();
+    };
+
     const headingText = "📊 MODEL: " + modelKey;
+
+    const title = data.section_title ||
+      "Question: " + (data.question_id || "?") + " · Model: " + (data.model || data.model_alias || "Unknown");
 
     const lines = [];
     lines.push({ text: "——————————————", list: false });
-    lines.push({ text: data.section_title, list: false });
-    if (data.question) lines.push({ text: "🧐 Question: " + data.question, list: false });
-    lines.push({ text: "Fully Correct Rate: " + data.fully_correct_rate + "%", list: true });
-    lines.push({ text: "Average Quality Score: " + data.avg_quality_score + " / 8", list: true });
-    lines.push({ text: "Average Response Time: " + data.avg_response_time + " s", list: true });
-    lines.push({ text: "Tokens/Second: " + data.tokens_per_sec, list: true });
-    lines.push({ text: "Total Tokens: " + data.total_tokens, list: true });
+    lines.push({ text: title, list: false });
+    if (data.question) lines.push({ text: "🧐 " + data.question, list: false });
+    lines.push({ text: "", list: false });
+    lines.push({ text: "Fully Correct Rate: " + fmtNum(data.fully_correct_rate) + "%", list: true });
+    lines.push({ text: "Average Quality Score: " + fmtNum(data.avg_quality_score) + " / 8", list: true });
+    lines.push({ text: "Average Response Time: " + fmtNum(data.avg_response_time) + " s", list: true });
+    lines.push({ text: "Tokens/Second: " + fmtNum(data.tokens_per_sec), list: true });
+    lines.push({ text: "Total Tokens: " + fmtNum(data.total_tokens), list: true });
     if (data.total_score !== undefined && data.total_score !== null) {
-      lines.push({ text: "🧑‍💻 Rubric Score: " + data.total_score + " / 8", list: true });
+      lines.push({ text: "Rubric Score: " + data.total_score + " / 8", list: true });
     }
 
     const paragraphs = body.getParagraphs();

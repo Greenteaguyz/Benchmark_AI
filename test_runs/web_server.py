@@ -19,6 +19,8 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 
+from csv_utils import append_record_row
+
 # --- 1. Constants & Directory Paths ---
 OLLAMA_API_BASE = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
@@ -226,13 +228,8 @@ def save_response_artifact(qid: str, model_name: str, prompt: str, response_text
 
 
 def log_comparison_csv(record: dict, csv_path: str):
-    """Appends benchmark measurement record to comparison_log.csv."""
-    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-    df = pd.DataFrame([record])
-    if not os.path.exists(csv_path):
-        df.to_csv(csv_path, index=False)
-    else:
-        df.to_csv(csv_path, mode="a", header=False, index=False)
+    """Appends benchmark measurement record to comparison_log.csv (lock + trailing newline)."""
+    append_record_row(record, csv_path)
 
 
 # --- 3. API Handlers ---
@@ -530,7 +527,7 @@ async def api_logs(request):
 
     if os.path.exists(csv_path):
         try:
-            df = pd.read_csv(csv_path)
+            df = pd.read_csv(csv_path, on_bad_lines="warn")
             return JSONResponse({"success": True, "rows": df.to_dict(orient="records")})
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e), "rows": []})

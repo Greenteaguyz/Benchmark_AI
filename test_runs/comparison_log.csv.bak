@@ -23,5 +23,4 @@ timestamp,question_id,model,model_alias,total_duration_s,generation_duration_s,o
 2026-09-15 01:10:58,Q01,qwen3:8b,QWEN,19.145,16.859,863,51.19,5691.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_QWEN.json
 2026-09-15 01:11:57,Q01,phi4-mini-reasoning,PHI,11.449,9.243,700,75.73,3947.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_PHI.json
 2026-09-15 01:13:38,Q01,deepseek-r1:7b,DSR1,6.793,4.663,260,55.76,4859.0,Completed,C:\Users\User\Downloads\AI_Project\test_runs\responses\Q01_DSR1.json
-2026-09-15 09:19:46,Q02,phi4-mini-reasoning,PHI,25.016,20.068,84,4.19,0.0,Completed,/home/ratanakvichea/Benchmark_AI/test_runs/responses/Q02_PHI.json
-2026-09-15 11:44:54,Q01,phi4-mini-reasoning,PHI,26.495,21.85,97,4.44,0.0,Completed,/home/ratanakvichea/Benchmark_AI/test_runs/responses/Q01_PHI.json
+2026-09-15 09:19:46,Q02,phi4-mini-reasoning,PHI,25.016,20.068,84,4.19,0.0,Completed,/home/ratanakvichea/Benchmark_AI/test_runs/responses/Q02_PHI.json2026-09-15 11:44:54,Q01,phi4-mini-reasoning,PHI,26.495,21.85,97,4.44,0.0,Completed,/home/ratanakvichea/Benchmark_AI/test_runs/responses/Q01_PHI.json

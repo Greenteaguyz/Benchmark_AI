@@ -13,6 +13,8 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from csv_utils import append_record_row
+
 # --- 1. Guidelines & Controlled Experiment Constants (Page 2 & 6) ---
 OLLAMA_API_BASE = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
@@ -373,13 +375,8 @@ def save_response_artifact(qid: str, model_name: str, prompt: str, response_text
 
 
 def log_comparison_csv(record: dict, csv_path: str):
-    """Appends benchmark measurement record to comparison_log.csv."""
-    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-    df = pd.DataFrame([record])
-    if not os.path.exists(csv_path):
-        df.to_csv(csv_path, index=False)
-    else:
-        df.to_csv(csv_path, mode="a", header=False, index=False)
+    """Appends benchmark measurement record to comparison_log.csv (lock + trailing newline)."""
+    append_record_row(record, csv_path)
 
 
 # --- 2.5 Google Docs Sync & Rubric Scoring Helpers ---
@@ -406,19 +403,14 @@ def save_google_docs_config(cfg: dict):
 
 
 def save_score_record(record: dict):
-    """Appends one human rubric score row to data/scoring_log.csv."""
-    os.makedirs(os.path.dirname(SCORING_LOG_PATH), exist_ok=True)
-    df = pd.DataFrame([record])
-    if not os.path.exists(SCORING_LOG_PATH):
-        df.to_csv(SCORING_LOG_PATH, index=False)
-    else:
-        df.to_csv(SCORING_LOG_PATH, mode="a", header=False, index=False)
+    """Appends one human rubric score row to data/scoring_log.csv (lock + trailing newline)."""
+    append_record_row(record, SCORING_LOG_PATH)
 
 
 def _read_csv_quietly(path: str) -> pd.DataFrame:
     try:
         if os.path.exists(path):
-            return pd.read_csv(path)
+            return pd.read_csv(path, on_bad_lines="warn")
     except Exception:
         pass
     return pd.DataFrame()
@@ -635,6 +627,26 @@ with st.sidebar:
             st.error("Copy your Apps Script **/exec URL** above to enable syncing.", icon="🔗")
         else:
             st.caption("Status: ✅ will send results → your Google Doc after you save a score.")
+            if st.button("🧪 Test Docs Sync", key="gd_test_btn", use_container_width=True,
+                         help="Sends a sample entry to your Google Doc to verify the connection (marked as a test)."):
+                test_payload = {
+                    "section_title": "🧪 SYNC TEST from Streamlit — safe to delete",
+                    "question_id": "Q_TEST",
+                    "model": "phi4-mini-reasoning",
+                    "model_alias": "PHI",
+                    "question": "Connection check triggered from the Streamlit sidebar.",
+                    "total_score": 8,
+                    "fully_correct_rate": 100.0,
+                    "avg_quality_score": 8.0,
+                    "avg_response_time": 12.3,
+                    "tokens_per_sec": 50.0,
+                    "total_tokens": 512,
+                }
+                ok, msg = append_result_to_docs(_gd_url.strip(), test_payload)
+                if ok:
+                    st.success(f"📄 {msg}", icon="✅")
+                else:
+                    st.error(f"📄 {msg}", icon="❌")
     else:
         st.caption("Status: ⏸️ Docs sync is OFF.")
 
@@ -1078,30 +1090,38 @@ def render_benchmark_control_panel():
                     save_score_record(score_record)
                     st.success(f"✅ Saved score (**{total_score}/8**) to `data/scoring_log.csv`.", icon="📝")
 
-                    metrics = compute_model_metrics(res["model"], mode_str)
+                    try:
+                        metrics = compute_model_metrics(res["model"], mode_str)
+                    except Exception as ce:
+                        st.error(f"⚠️ Could not compute metrics for docs sync: `{ce}`", icon="❌")
+                        metrics = {}
+
                     _gd_cfg2 = load_google_docs_config()
                     _gd_url2 = _gd_cfg2.get("apps_script_url", "")
                     _gd_on2 = _gd_cfg2.get("enabled", False)
 
                     if _gd_on2 and _gd_url2.strip():
                         payload = {
-                            "section_title": f"{res['question_id']} · {res['model_alias']} · {res['timestamp']} · {mode_str.upper()}",
+                            "section_title": f"Question: {res['question_id']} · Model: {res['model_alias']} ({res['model']})",
                             "question_id": res["question_id"],
                             "model": res["model"],
                             "model_alias": res["model_alias"],
                             "question": res.get("prompt", ""),
                             "total_score": total_score,
-                            "fully_correct_rate": metrics["fully_correct_rate"],
-                            "avg_quality_score": metrics["avg_quality_score"],
-                            "avg_response_time": metrics["avg_response_time"],
-                            "tokens_per_sec": metrics["tokens_per_sec"],
-                            "total_tokens": metrics["total_tokens"],
+                            "fully_correct_rate": metrics.get("fully_correct_rate", 0.0),
+                            "avg_quality_score": metrics.get("avg_quality_score", 0.0),
+                            "avg_response_time": metrics.get("avg_response_time", 0.0),
+                            "tokens_per_sec": metrics.get("tokens_per_sec", 0.0),
+                            "total_tokens": metrics.get("total_tokens", 0),
                         }
-                        ok, msg = append_result_to_docs(_gd_url2, payload)
-                        if ok:
-                            st.success(f"📄 {msg}: `{payload['section_title']}`", icon="✅")
-                        else:
-                            st.error(f"📄 {msg}", icon="❌")
+                        try:
+                            ok, msg = append_result_to_docs(_gd_url2, payload)
+                            if ok:
+                                st.success(f"📄 {msg}: `{payload['section_title']}`", icon="✅")
+                            else:
+                                st.error(f"📄 {msg}", icon="❌")
+                        except Exception as de:
+                            st.error(f"📄 Docs sync failed unexpectedly: `{de}`", icon="❌")
                     else:
                         st.info(
                             "📄 Docs sync is **OFF** — this score was saved locally only. Enable it in the sidebar to start appending results to your Google Doc.",
@@ -1126,7 +1146,7 @@ tab_test, tab_official = st.tabs(["🧪 Test Runs (`test_runs/`)", "📋 Officia
 with tab_test:
     st.markdown("#### Test Artifacts & Logs")
     if os.path.exists(TEST_LOG_CSV_PATH):
-        df_test = pd.read_csv(TEST_LOG_CSV_PATH)
+        df_test = pd.read_csv(TEST_LOG_CSV_PATH, on_bad_lines="warn")
         st.dataframe(df_test, use_container_width=True)
         st.download_button("📥 Download Test CSV", df_test.to_csv(index=False), file_name="test_comparison_log.csv")
     else:
@@ -1143,7 +1163,7 @@ with tab_test:
 with tab_official:
     st.markdown("#### Official Frozen Deliverables")
     if os.path.exists(OFFICIAL_LOG_CSV_PATH):
-        df_off = pd.read_csv(OFFICIAL_LOG_CSV_PATH)
+        df_off = pd.read_csv(OFFICIAL_LOG_CSV_PATH, on_bad_lines="warn")
         st.dataframe(df_off, use_container_width=True)
         st.download_button("📥 Download Official CSV", df_off.to_csv(index=False), file_name="official_comparison_log.csv")
     else:
