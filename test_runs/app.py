@@ -1177,23 +1177,41 @@ def format_vram_telemetry(row: dict) -> str:
         return str(val)
 
 
+def resolve_evidence_path(evidence_file: str, qid: str, alias: str, responses_dir: str):
+    """Resolves JSON artifact path across Windows/Linux paths, local directories, and fallbacks."""
+    if evidence_file and os.path.isfile(evidence_file):
+        return evidence_file
+
+    search_dirs = [responses_dir, TEST_RESPONSES_DIR, OFFICIAL_RESPONSES_DIR]
+
+    # Extract basename from Linux or Windows paths
+    if evidence_file:
+        base = os.path.basename(evidence_file.replace("\\", "/"))
+        for d in search_dirs:
+            cand = os.path.join(d, base)
+            if os.path.isfile(cand):
+                return cand
+
+    # Standard fallback {qid}_{alias}.json
+    if qid and alias:
+        fallback = f"{qid}_{alias}.json"
+        for d in search_dirs:
+            cand = os.path.join(d, fallback)
+            if os.path.isfile(cand):
+                return cand
+
+    return None
+
+
 def load_evidence_artifact(row: dict, responses_dir: str):
-    """Loads response JSON artifact for a given run record."""
+    """Loads response JSON artifact for a given run record with cross-directory recovery."""
     qid = row.get("question_id", "")
     model_name = row.get("model", "")
     model_alias = row.get("model_alias", "")
+    alias = model_alias or REQUIRED_MODELS.get(model_name, {}).get("alias", "")
     ev_file = str(row.get("evidence_file", "")).strip()
 
-    evidence_path = None
-    if ev_file and os.path.exists(ev_file) and os.path.isfile(ev_file):
-        evidence_path = ev_file
-    else:
-        alias = model_alias or REQUIRED_MODELS.get(model_name, {}).get("alias", "")
-        fallback_fn = f"{qid}_{alias}.json"
-        check_path = os.path.join(responses_dir, fallback_fn)
-        if os.path.exists(check_path):
-            evidence_path = check_path
-
+    evidence_path = resolve_evidence_path(ev_file, qid, alias, responses_dir)
     if evidence_path and os.path.exists(evidence_path):
         try:
             with open(evidence_path, "r", encoding="utf-8") as f:
@@ -1204,236 +1222,286 @@ def load_evidence_artifact(row: dict, responses_dir: str):
     return None, None
 
 
-def render_side_by_side_comparison(df: pd.DataFrame, responses_dir: str, tab_key: str):
-    """Renders 3-model side-by-side comparison for a selected frozen question."""
-    st.markdown("##### ⚖️ Side-by-Side 3-Model Comparison View")
-    st.caption("Select any benchmark question to compare PHI, DSR1, and QWEN outputs and hardware telemetry side-by-side:")
+def render_run_inspector(df: pd.DataFrame, responses_dir: str, tab_key: str, download_filename: str):
+    """Minimalist, highly responsive single run explorer and response viewer."""
+    if df.empty:
+        st.info("No benchmark records found.")
+        return
 
-    q_keys = list(BENCHMARK_QUESTIONS.keys())
-    selected_comp_qid = st.selectbox(
-        "Select Benchmark Question",
-        q_keys,
-        format_func=lambda q: f"{q} [{BENCHMARK_QUESTIONS[q]['category']} • {BENCHMARK_QUESTIONS[q]['difficulty']}]: {BENCHMARK_QUESTIONS[q]['prompt'][:75]}...",
-        key=f"{tab_key}_comp_qid_select",
+    # Filter controls in a single compact row
+    col_q, col_mod, col_btn = st.columns([2, 2, 1])
+    with col_q:
+        q_options = ["All Questions"] + sorted([str(q) for q in df["question_id"].dropna().unique() if str(q).strip()])
+        sel_q = st.selectbox("Filter Question", q_options, key=f"{tab_key}_insp_q")
+    with col_mod:
+        mod_options = ["All Models"] + sorted([str(m) for m in df["model_alias"].dropna().unique() if str(m).strip()])
+        sel_mod = st.selectbox("Filter Model", mod_options, key=f"{tab_key}_insp_mod")
+    with col_btn:
+        st.write("")
+        st.download_button(
+            "📥 Export CSV",
+            df.to_csv(index=False),
+            file_name=download_filename,
+            use_container_width=True
+        )
+
+    # Apply filters
+    df_view = df.copy()
+    if sel_q != "All Questions":
+        df_view = df_view[df_view["question_id"] == sel_q]
+    if sel_mod != "All Models":
+        df_view = df_view[df_view["model_alias"] == sel_mod]
+
+    if df_view.empty:
+        st.info("No runs match the selected filter.")
+        return
+
+    # Generate clean, descriptive labels for each run
+    df_view = df_view.reset_index(drop=True)
+    run_indices = list(range(len(df_view)))
+
+    def make_run_label(i: int) -> str:
+        r = df_view.iloc[i]
+        qid = r.get("question_id", "Q")
+        alias = r.get("model_alias", "") or r.get("model", "")
+        tps = r.get("tokens_per_sec", "N/A")
+        ts = r.get("timestamp", "")
+        vram = format_vram_telemetry(r)
+        return f"[{qid}] {alias} · {vram} VRAM · {tps} tok/s · {ts}"
+
+    # Default to latest run (last row in table)
+    default_idx = len(df_view) - 1
+
+    st.caption("Select a run to inspect its hardware telemetry, reasoning trace, and verified answer:")
+    selected_i = st.selectbox(
+        "Select Run",
+        run_indices,
+        index=default_idx,
+        format_func=make_run_label,
+        key=f"{tab_key}_run_selector",
         label_visibility="collapsed"
     )
 
-    q_info = BENCHMARK_QUESTIONS[selected_comp_qid]
-    with st.expander(f"📌 Prompt Details for `{selected_comp_qid}` ({q_info['category']} • {q_info['difficulty']})", expanded=False):
-        st.markdown(f"> {q_info['prompt']}")
+    selected_row = df_view.iloc[selected_i].to_dict()
+    qid = selected_row.get("question_id", "Run")
+    alias = selected_row.get("model_alias", "")
+    model_name = selected_row.get("model", "")
+    ts = selected_row.get("timestamp", "")
+    status = selected_row.get("completion_status", "Completed")
 
-    col_phi, col_dsr1, col_qwen = st.columns(3)
+    # Minimalist Telemetry Bar
+    vram_str = format_vram_telemetry(selected_row)
+    tps_val = selected_row.get("tokens_per_sec", "N/A")
+    tot_s = selected_row.get("total_duration_s", "N/A")
+    gen_s = selected_row.get("generation_duration_s", "N/A")
+    toks = selected_row.get("output_tokens", "N/A")
+
+    st.markdown(
+        f"#### `{qid}` · **{alias}** (`{model_name}`) — `{status}`"
+    )
+    st.caption(f"Recorded at: `{ts}`")
+
+    # Clean metric cards
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("💾 Peak VRAM", vram_str)
+    m2.metric("⚡ Speed", f"{tps_val} tok/s" if tps_val != "N/A" else "N/A")
+    m3.metric("⏱️ Duration", f"{tot_s} s" if tot_s != "N/A" else "N/A", f"Eval: {gen_s}s" if gen_s != "N/A" else None)
+    m4.metric("🔢 Tokens", f"{toks}")
+
+    # Prompt details
+    prompt_from_meta = BENCHMARK_QUESTIONS.get(qid, {}).get("prompt")
+    category = BENCHMARK_QUESTIONS.get(qid, {}).get("category", "General")
+    difficulty = BENCHMARK_QUESTIONS.get(qid, {}).get("difficulty", "Standard")
+
+    # Load Artifact
+    art_data, art_path = load_evidence_artifact(selected_row, responses_dir)
+    prompt_text = (art_data.get("prompt") if art_data else None) or prompt_from_meta
+
+    if prompt_text:
+        st.info(f"**Question Prompt ({category} • {difficulty}):**\n\n{prompt_text}")
+
+    if art_data:
+        resp_text = art_data.get("response", "")
+        thought, final_ans = parse_reasoning_and_answer(resp_text)
+
+        if thought:
+            with st.expander("💭 Reasoning Trace (<think>)", expanded=True):
+                st.markdown(format_latex_for_display(thought))
+
+        st.markdown("##### 🎯 Verified Model Output")
+        st.markdown(format_latex_for_display(final_ans or resp_text))
+
+        if art_path:
+            st.caption(f"📁 Evidence Artifact: `{art_path}`")
+    else:
+        st.warning(
+            f"ℹ️ Response artifact `{qid}_{alias}.json` was not found on disk for this specific run. "
+            f"Logged CSV metrics above remain fully preserved."
+        )
+
+    # Clean Collapsible Raw Data Table
+    with st.expander("📊 View Complete Log Table", expanded=False):
+        preferred_cols = ["question_id", "model_alias", "tokens_per_sec", "peak_vram_mb", "total_duration_s", "output_tokens", "completion_status", "timestamp"]
+        available_cols = [c for c in preferred_cols if c in df_view.columns]
+        st.dataframe(df_view[available_cols], use_container_width=True)
+
+
+def render_model_comparison(df: pd.DataFrame, responses_dir: str, tab_key: str):
+    """Minimalist, genuinely useful model comparison with hardware summary and side-by-side outputs."""
+    st.markdown("##### 📊 Hardware Benchmark Summary")
+    st.caption("Aggregated performance metrics across models on this 8 GB VRAM system:")
+
+    # Build Summary Table
+    summary_rows = []
     target_models = [
-        ("phi4-mini-reasoning", "PHI", "Phi-4 Mini Reasoning", col_phi, "🟢"),
-        ("deepseek-r1:7b", "DSR1", "DeepSeek R1 7B", col_dsr1, "🔵"),
-        ("qwen3:8b", "QWEN", "Qwen 3 8B", col_qwen, "🟣"),
+        ("phi4-mini-reasoning", "PHI", "Phi-4 Mini Reasoning"),
+        ("deepseek-r1:7b", "DSR1", "DeepSeek R1 7B"),
+        ("qwen3:8b", "QWEN", "Qwen 3 8B"),
     ]
 
-    for model_name, alias, display_name, col, badge in target_models:
-        with col:
-            with st.container(border=True):
-                st.markdown(f"**{badge} {alias}** (`{model_name}`)")
+    for model_name, alias, display_name in target_models:
+        if not df.empty and "model_alias" in df.columns:
+            m_df = df[(df["model_alias"] == alias) | (df["model"] == model_name)]
+        else:
+            m_df = pd.DataFrame()
 
-                # Find run in df
-                matched_row = None
-                if not df.empty and "question_id" in df.columns:
-                    mask = (df["question_id"] == selected_comp_qid) & (
-                        (df["model_alias"] == alias) | (df["model"] == model_name)
-                    )
-                    matches = df[mask]
-                    if not matches.empty:
-                        matched_row = matches.iloc[-1].to_dict()
+        if not m_df.empty:
+            vram_col = "peak_vram_mb" if "peak_vram_mb" in m_df.columns else "peak_vram_gb"
+            vram_vals = pd.to_numeric(m_df[vram_col], errors="coerce").dropna()
+            max_vram = vram_vals.max() if not vram_vals.empty else None
+            vram_str = f"{max_vram:.0f} MB" if max_vram and max_vram > 100 else (f"{max_vram*1024:.0f} MB" if max_vram else "N/A")
 
-                # Find artifact
-                art_data, art_path = None, None
-                if matched_row:
-                    art_data, art_path = load_evidence_artifact(matched_row, responses_dir)
-                else:
-                    fn = f"{selected_comp_qid}_{alias}.json"
-                    cand = os.path.join(responses_dir, fn)
-                    if os.path.exists(cand):
-                        try:
-                            with open(cand, "r", encoding="utf-8") as f:
-                                art_data = json.load(f)
-                            art_path = cand
-                        except Exception:
-                            pass
+            speed_vals = pd.to_numeric(m_df.get("tokens_per_sec"), errors="coerce").dropna()
+            avg_speed = f"{speed_vals.mean():.1f} tok/s" if not speed_vals.empty else "N/A"
+            max_speed = f"{speed_vals.max():.1f} tok/s" if not speed_vals.empty else "N/A"
 
-                if matched_row or art_data:
-                    vram_str = format_vram_telemetry(matched_row) if matched_row else "N/A"
-                    tps = matched_row.get("tokens_per_sec") if matched_row else None
-                    dur = matched_row.get("total_duration_s") if matched_row else None
-                    toks = matched_row.get("output_tokens") if matched_row else None
+            dur_vals = pd.to_numeric(m_df.get("total_duration_s"), errors="coerce").dropna()
+            avg_dur = f"{dur_vals.mean():.1f} s" if not dur_vals.empty else "N/A"
 
-                    m_c1, m_c2 = st.columns(2)
-                    m_c1.metric("💾 Peak VRAM", vram_str)
-                    m_c2.metric("⚡ Speed", f"{tps} tok/s" if tps is not None and not pd.isna(tps) else "N/A")
+            q_count = len(m_df["question_id"].dropna().unique()) if "question_id" in m_df.columns else 0
 
-                    m_c3, m_c4 = st.columns(2)
-                    m_c3.metric("⏱️ Duration", f"{dur} s" if dur is not None and not pd.isna(dur) else "N/A")
-                    m_c4.metric("🔢 Tokens", f"{toks}" if toks is not None and not pd.isna(toks) else "N/A")
+            summary_rows.append({
+                "Model": f"{alias} ({model_name})",
+                "Peak VRAM": vram_str,
+                "Avg Speed": avg_speed,
+                "Peak Speed": max_speed,
+                "Avg Duration": avg_dur,
+                "Questions Run": f"{q_count} questions ({len(m_df)} runs)"
+            })
+        else:
+            summary_rows.append({
+                "Model": f"{alias} ({model_name})",
+                "Peak VRAM": "No runs yet",
+                "Avg Speed": "—",
+                "Peak Speed": "—",
+                "Avg Duration": "—",
+                "Questions Run": "0 runs"
+            })
 
-                    if art_data:
-                        resp_text = art_data.get("response", "")
-                        thought, final_ans = parse_reasoning_and_answer(resp_text)
-                        if thought:
-                            with st.expander("💭 Reasoning Trace (<think>)", expanded=False):
-                                st.markdown(format_latex_for_display(thought))
-                        st.markdown("**Verified Answer:**")
-                        st.markdown(format_latex_for_display(final_ans or resp_text))
-                    else:
-                        st.caption("ℹ️ Telemetry recorded, response artifact not found.")
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
-                    if art_path:
-                        st.caption(f"📁 `{os.path.basename(art_path)}`")
-                else:
-                    st.info(f"⚪ No run recorded yet for **{alias}** on `{selected_comp_qid}`.")
+    st.markdown("---")
+    st.markdown("##### ⚖️ Side-by-Side Question Comparison")
 
+    # Discover questions that ACTUALLY have at least one artifact or log entry
+    available_qs = set()
+    if not df.empty and "question_id" in df.columns:
+        available_qs.update(df["question_id"].dropna().unique())
 
-def render_master_detail_log(df: pd.DataFrame, responses_dir: str, tab_key: str, download_filename: str):
-    """Renders clean 60/40 Master-Detail layout with search filters and live Telemetry Inspector."""
-    st.markdown("##### 📋 Master Comparison Log & Live Inspector")
+    # Also check responses directories
+    for d in [responses_dir, TEST_RESPONSES_DIR, OFFICIAL_RESPONSES_DIR]:
+        if os.path.exists(d):
+            for fn in os.listdir(d):
+                if fn.endswith(".json") and "_" in fn:
+                    qid_part = fn.split("_")[0]
+                    available_qs.add(qid_part)
 
-    # Filter Bar
-    col_f1, col_f2, col_f3 = st.columns([1, 1, 1])
-    with col_f1:
-        models_in_df = sorted([str(x) for x in df["model_alias"].dropna().unique() if str(x).strip()]) if not df.empty and "model_alias" in df.columns else []
-        sel_model = st.selectbox("Filter Model", ["All Models"] + models_in_df, key=f"{tab_key}_filt_model")
-    with col_f2:
-        qs_in_df = sorted([str(x) for x in df["question_id"].dropna().unique() if str(x).strip()]) if not df.empty and "question_id" in df.columns else []
-        sel_q = st.selectbox("Filter Question", ["All Questions"] + qs_in_df, key=f"{tab_key}_filt_q")
-    with col_f3:
-        statuses_in_df = sorted([str(x) for x in df["completion_status"].dropna().unique() if str(x).strip()]) if not df.empty and "completion_status" in df.columns else []
-        sel_status = st.selectbox("Filter Status", ["All Statuses"] + statuses_in_df, key=f"{tab_key}_filt_status")
+    # Sort available questions
+    sorted_qs = sorted(list(available_qs))
 
-    # Filter data
-    df_filt = df.copy() if not df.empty else pd.DataFrame()
-    if not df_filt.empty:
-        if sel_model != "All Models" and "model_alias" in df_filt.columns:
-            df_filt = df_filt[df_filt["model_alias"] == sel_model]
-        if sel_q != "All Questions" and "question_id" in df_filt.columns:
-            df_filt = df_filt[df_filt["question_id"] == sel_q]
-        if sel_status != "All Statuses" and "completion_status" in df_filt.columns:
-            df_filt = df_filt[df_filt["completion_status"] == sel_status]
-
-    if df_filt.empty:
-        st.info("No run records match the current filter selection.")
+    if not sorted_qs:
+        st.info("No questions have been run yet. Execute benchmark runs above to compare models.")
         return
 
-    # Master-Detail Split (60% Table, 40% Telemetry Card)
-    col_table, col_detail = st.columns([3, 2])
+    selected_comp_qid = st.selectbox(
+        "Select Question to Compare",
+        sorted_qs,
+        format_func=lambda q: (
+            f"{q} [{BENCHMARK_QUESTIONS[q]['category']} • {BENCHMARK_QUESTIONS[q]['difficulty']}]: {BENCHMARK_QUESTIONS[q]['prompt'][:70]}..."
+            if q in BENCHMARK_QUESTIONS else f"{q} (Custom Question)"
+        ),
+        key=f"{tab_key}_comp_available_qid"
+    )
 
-    with col_table:
-        st.markdown(f"**Records Table** ({len(df_filt)} runs found)")
+    if selected_comp_qid in BENCHMARK_QUESTIONS:
+        q_info = BENCHMARK_QUESTIONS[selected_comp_qid]
+        st.info(f"**Prompt ({selected_comp_qid}):** {q_info['prompt']}")
 
-        # Prepare clean columns for display
-        preferred_cols = ["question_id", "model_alias", "tokens_per_sec", "peak_vram_mb", "total_duration_s", "output_tokens", "completion_status", "timestamp"]
-        available_cols = [c for c in preferred_cols if c in df_filt.columns]
-        if "peak_vram_mb" not in available_cols and "peak_vram_gb" in df_filt.columns:
-            available_cols.insert(3, "peak_vram_gb")
+    col_phi, col_dsr1, col_qwen = st.columns(3)
+    cols = [col_phi, col_dsr1, col_qwen]
 
-        df_display = df_filt[available_cols].copy()
-        
-        rename_map = {
-            "question_id": "QID",
-            "model_alias": "Model",
-            "tokens_per_sec": "Speed (tok/s)",
-            "peak_vram_mb": "Peak VRAM (MB)",
-            "peak_vram_gb": "Peak VRAM (GB)",
-            "total_duration_s": "Duration (s)",
-            "output_tokens": "Tokens",
-            "completion_status": "Status",
-            "timestamp": "Timestamp",
-        }
-        df_display = df_display.rename(columns={k: v for k, v in rename_map.items() if k in df_display.columns})
+    for idx, (model_name, alias, display_name) in enumerate(target_models):
+        with cols[idx]:
+            st.markdown(f"#### {alias}")
+            st.caption(f"`{model_name}`")
 
-        selected_row_idx = None
-        try:
-            event = st.dataframe(
-                df_display,
-                use_container_width=True,
-                on_select="rerun",
-                selection_mode="single-row",
-                key=f"{tab_key}_df_select",
-                hide_index=False
-            )
-            if event and hasattr(event, "selection") and event.selection.rows:
-                selected_row_idx = event.selection.rows[0]
-        except Exception:
-            st.dataframe(df_display, use_container_width=True)
+            # Look up run in df
+            matched_row = None
+            if not df.empty and "question_id" in df.columns:
+                matches = df[(df["question_id"] == selected_comp_qid) & ((df["model_alias"] == alias) | (df["model"] == model_name))]
+                if not matches.empty:
+                    matched_row = matches.iloc[-1].to_dict()
 
-        max_idx = len(df_filt)
-        default_val = int(selected_row_idx + 1) if selected_row_idx is not None and selected_row_idx < max_idx else max_idx
-        nav_col1, nav_col2 = st.columns([1, 1])
-        with nav_col1:
-            chosen_row_num = st.number_input(
-                "Inspect Row #",
-                min_value=1,
-                max_value=max_idx,
-                value=default_val,
-                step=1,
-                key=f"{tab_key}_num_input",
-                help="Select row number to view its full telemetry on the right"
-            )
-        with nav_col2:
-            st.write("")
-            st.download_button(
-                "📥 Export CSV",
-                df_filt.to_csv(index=False),
-                file_name=download_filename,
-                use_container_width=True
-            )
+            # Look up artifact
+            art_data = None
+            if matched_row:
+                art_data, _ = load_evidence_artifact(matched_row, responses_dir)
+            if not art_data:
+                cand_path = resolve_evidence_path("", selected_comp_qid, alias, responses_dir)
+                if cand_path:
+                    try:
+                        with open(cand_path, "r", encoding="utf-8") as f:
+                            art_data = json.load(f)
+                    except Exception:
+                        pass
 
-        active_idx = chosen_row_num - 1
+            if matched_row or art_data:
+                vram_s = format_vram_telemetry(matched_row) if matched_row else "N/A"
+                tps_s = f"{matched_row.get('tokens_per_sec')} tok/s" if matched_row and matched_row.get('tokens_per_sec') else "N/A"
+                st.markdown(f"**VRAM:** `{vram_s}` | **Speed:** `{tps_s}`")
 
-    with col_detail:
-        selected_record = df_filt.iloc[active_idx].to_dict()
-        qid = selected_record.get("question_id", "Run")
-        alias = selected_record.get("model_alias", "")
-        model_name = selected_record.get("model", "")
-        ts = selected_record.get("timestamp", "")
-        status = selected_record.get("completion_status", "Completed")
-
-        with st.container(border=True):
-            st.markdown(f"#### 📊 Telemetry Card: `{qid}` • `{alias}`")
-            st.caption(f"**Model:** `{model_name}` | **Time:** `{ts}` | **Status:** `{status}`")
-
-            # Metrics Grid
-            m1, m2 = st.columns(2)
-            m1.metric("💾 Peak VRAM", format_vram_telemetry(selected_record))
-            tps_val = selected_record.get("tokens_per_sec", 0)
-            m2.metric("⚡ Speed", f"{tps_val} tok/s" if tps_val else "N/A")
-
-            m3, m4 = st.columns(2)
-            tot_s = selected_record.get("total_duration_s", 0)
-            gen_s = selected_record.get("generation_duration_s", 0)
-            m3.metric("⏱️ Duration", f"{tot_s} s" if tot_s else "N/A", f"Eval: {gen_s} s" if gen_s else None)
-            m4.metric("🔢 Output Tokens", f"{selected_record.get('output_tokens', 0)}")
-
-            # Artifact payload
-            art_data, art_path = load_evidence_artifact(selected_record, responses_dir)
-            if art_data:
-                prompt_txt = art_data.get("prompt", "")
-                resp_txt = art_data.get("response", "")
-                thought, final_ans = parse_reasoning_and_answer(resp_txt)
-
-                if prompt_txt:
-                    with st.expander("📝 Question Prompt", expanded=False):
-                        st.markdown(f"> {prompt_txt}")
-
-                if thought:
-                    with st.expander("💭 Chain-of-Thought (<think>)", expanded=True):
-                        st.markdown(format_latex_for_display(thought))
-
-                st.markdown("**Verified Answer Output:**")
-                st.markdown(format_latex_for_display(final_ans or resp_txt))
-
-                if art_path:
-                    st.caption(f"📁 Evidence Artifact: `{art_path}`")
-                    with st.expander("📄 Raw JSON Artifact"):
-                        st.json(art_data)
+                if art_data:
+                    resp_text = art_data.get("response", "")
+                    thought, final_ans = parse_reasoning_and_answer(resp_text)
+                    if thought:
+                        with st.expander("💭 Reasoning (<think>)", expanded=False):
+                            st.markdown(format_latex_for_display(thought))
+                    st.markdown("**Answer:**")
+                    st.markdown(format_latex_for_display(final_ans or resp_text))
+                else:
+                    st.caption("ℹ️ Telemetry logged; response file not on disk.")
             else:
-                st.info("ℹ️ No JSON response artifact file found for this record.")
+                st.info(f"⚪ No run for **{alias}** yet.")
+
+
+def render_section_tabs(df: pd.DataFrame, responses_dir: str, tab_key: str, download_name: str):
+    """Renders clean minimalist section with view mode switcher."""
+    if df.empty:
+        st.info("No comparison log found yet.")
+        return
+
+    view_mode = st.radio(
+        "View Mode",
+        ["📋 Run History & Responses", "⚖️ 3-Model Comparison & Summary"],
+        horizontal=True,
+        key=f"{tab_key}_mode_toggle",
+        label_visibility="collapsed"
+    )
+
+    if view_mode == "📋 Run History & Responses":
+        render_run_inspector(df, responses_dir, tab_key, download_name)
+    else:
+        render_model_comparison(df, responses_dir, tab_key)
 
 
 tab_test, tab_official = st.tabs(["🧪 Test Runs (`test_runs/`)", "📋 Official Dataset (`data/`)"])
@@ -1441,24 +1509,15 @@ tab_test, tab_official = st.tabs(["🧪 Test Runs (`test_runs/`)", "📋 Officia
 with tab_test:
     if os.path.exists(TEST_LOG_CSV_PATH):
         df_test = pd.read_csv(TEST_LOG_CSV_PATH, on_bad_lines="warn")
-        if not df_test.empty:
-            render_side_by_side_comparison(df_test, TEST_RESPONSES_DIR, "test")
-            st.markdown("---")
-            render_master_detail_log(df_test, TEST_RESPONSES_DIR, "test", "test_comparison_log.csv")
-        else:
-            st.info("Test comparison log is empty.")
+        render_section_tabs(df_test, TEST_RESPONSES_DIR, "test", "test_comparison_log.csv")
     else:
         st.info("No test comparison log found yet.")
 
 with tab_official:
     if os.path.exists(OFFICIAL_LOG_CSV_PATH):
         df_off = pd.read_csv(OFFICIAL_LOG_CSV_PATH, on_bad_lines="warn")
-        if not df_off.empty:
-            render_side_by_side_comparison(df_off, OFFICIAL_RESPONSES_DIR, "official")
-            st.markdown("---")
-            render_master_detail_log(df_off, OFFICIAL_RESPONSES_DIR, "official", "official_comparison_log.csv")
-        else:
-            st.info("Official comparison log is empty.")
+        render_section_tabs(df_off, OFFICIAL_RESPONSES_DIR, "official", "official_comparison_log.csv")
     else:
         st.info("No official runs logged yet. Switch to 'Official Benchmark Mode' when ready to collect the 45 deliverables.")
+
 
