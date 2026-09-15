@@ -1159,43 +1159,161 @@ with col_insp_btn:
     if st.button("🔄 Refresh Logs", key="manual_refresh_logs_btn", use_container_width=True, help="Force re-read comparison logs and artifacts from disk"):
         st.rerun()
 
+def render_past_run_detail(row: dict, responses_dir: str):
+    """Renders full metrics, Peak VRAM, reasoning trace, and answer for a past benchmark run."""
+    st.markdown("---")
+    qid = row.get("question_id", "Run")
+    model_name = row.get("model", "")
+    model_alias = row.get("model_alias", "")
+    ts = row.get("timestamp", "")
+
+    st.markdown(f"#### 📊 Selected Run Telemetry: `{qid}` — `{model_name}` (`{model_alias}`)")
+    st.caption(f"Recorded at: `{ts}`")
+
+    # Format Peak VRAM gracefully whether in MB or GB
+    peak_vram_val = row.get("peak_vram_mb")
+    if peak_vram_val is None or pd.isna(peak_vram_val) or str(peak_vram_val).strip() == "":
+        peak_vram_val = row.get("peak_vram_gb")
+
+    vram_str = "N/A"
+    if peak_vram_val is not None and not pd.isna(peak_vram_val):
+        try:
+            num = float(peak_vram_val)
+            if num > 100:
+                vram_str = f"{num:.0f} MB"
+            elif num > 0:
+                vram_str = f"{num:.2f} GB ({num * 1024:.0f} MB)"
+            else:
+                vram_str = "0 MB"
+        except (ValueError, TypeError):
+            vram_str = str(peak_vram_val)
+
+    # 5 Metrics in columns
+    m1, m2, m3, m4, m5 = st.columns(5)
+    tot_dur = row.get("total_duration_s", 0)
+    gen_dur = row.get("generation_duration_s", 0)
+    tokens = row.get("output_tokens", 0)
+    tps = row.get("tokens_per_sec", 0)
+    status = row.get("completion_status", "Completed")
+
+    m1.metric("💾 Peak VRAM", vram_str)
+    m2.metric("⚡ Speed", f"{tps} tok/s" if tps else "N/A")
+    m3.metric("⏱️ Total Time", f"{tot_dur} s" if tot_dur else "N/A", f"Eval: {gen_dur} s" if gen_dur else None)
+    m4.metric("🔢 Output Tokens", f"{tokens}")
+    m5.metric("📌 Status", str(status))
+
+    # Look up evidence JSON file
+    ev_file = str(row.get("evidence_file", "")).strip()
+    evidence_path = None
+    if ev_file and os.path.exists(ev_file) and os.path.isfile(ev_file):
+        evidence_path = ev_file
+    else:
+        alias = model_alias or REQUIRED_MODELS.get(model_name, {}).get("alias", "")
+        fallback_fn = f"{qid}_{alias}.json"
+        check_path = os.path.join(responses_dir, fallback_fn)
+        if os.path.exists(check_path):
+            evidence_path = check_path
+
+    if evidence_path and os.path.exists(evidence_path):
+        try:
+            with open(evidence_path, "r", encoding="utf-8") as f:
+                art = json.load(f)
+            prompt_text = art.get("prompt", "")
+            resp_text = art.get("response", "")
+            thought, final_ans = parse_reasoning_and_answer(resp_text)
+
+            if prompt_text:
+                st.markdown(f"**Prompt:**\n> {prompt_text}")
+
+            if thought:
+                with st.expander("💭 Reasoning Trace (<think>)", expanded=True):
+                    st.markdown(format_latex_for_display(thought))
+
+            st.markdown("##### Verified Output")
+            st.markdown(format_latex_for_display(final_ans or resp_text))
+            st.caption(f"📁 Source Artifact: `{evidence_path}`")
+        except Exception as e:
+            st.warning(f"Could not load artifact contents: {e}")
+    else:
+        st.caption("ℹ️ No JSON response artifact found for this entry.")
+
+
 tab_test, tab_official = st.tabs(["🧪 Test Runs (`test_runs/`)", "📋 Official Dataset (`data/`)"])
 
 with tab_test:
     st.markdown("#### Test Artifacts & Logs")
     if os.path.exists(TEST_LOG_CSV_PATH):
         df_test = pd.read_csv(TEST_LOG_CSV_PATH, on_bad_lines="warn")
-        st.dataframe(df_test, use_container_width=True)
-        st.download_button("📥 Download Test CSV", df_test.to_csv(index=False), file_name="test_comparison_log.csv")
+        if not df_test.empty:
+            selected_idx = None
+            try:
+                event = st.dataframe(
+                    df_test,
+                    use_container_width=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key="table_select_test"
+                )
+                if event and hasattr(event, "selection") and event.selection.rows:
+                    selected_idx = event.selection.rows[0]
+            except Exception:
+                st.dataframe(df_test, use_container_width=True)
+
+            options_labels = [
+                f"Row {i+1}: [{r.get('question_id','')}] {r.get('model_alias','') or r.get('model','')} — {r.get('tokens_per_sec','')} tok/s | Peak: {r.get('peak_vram_mb','') or r.get('peak_vram_gb','')} | {r.get('timestamp','')}"
+                for i, r in df_test.iterrows()
+            ]
+            default_sel = selected_idx if selected_idx is not None and selected_idx < len(options_labels) else 0
+            chosen_opt = st.selectbox(
+                "🔍 Click a table row above or pick a run here to inspect Peak VRAM & reasoning output:",
+                range(len(options_labels)),
+                format_func=lambda i: options_labels[i],
+                index=default_sel,
+                key="test_run_detail_picker"
+            )
+            render_past_run_detail(df_test.iloc[chosen_opt].to_dict(), TEST_RESPONSES_DIR)
+
+            st.download_button("📥 Download Test CSV", df_test.to_csv(index=False), file_name="test_comparison_log.csv")
+        else:
+            st.info("Test comparison log is empty.")
     else:
         st.info("No test comparison log found yet.")
-
-    # Inspect test JSON
-    if os.path.exists(TEST_RESPONSES_DIR):
-        test_files = [f for f in os.listdir(TEST_RESPONSES_DIR) if f.endswith(".json")]
-        if test_files:
-            chosen_test_file = st.selectbox("Inspect Test JSON File:", test_files)
-            with open(os.path.join(TEST_RESPONSES_DIR, chosen_test_file), "r", encoding="utf-8") as f:
-                st.json(json.load(f))
 
 with tab_official:
     st.markdown("#### Official Frozen Deliverables")
     if os.path.exists(OFFICIAL_LOG_CSV_PATH):
         df_off = pd.read_csv(OFFICIAL_LOG_CSV_PATH, on_bad_lines="warn")
-        st.dataframe(df_off, use_container_width=True)
-        st.download_button("📥 Download Official CSV", df_off.to_csv(index=False), file_name="official_comparison_log.csv")
+        if not df_off.empty:
+            selected_off_idx = None
+            try:
+                event_off = st.dataframe(
+                    df_off,
+                    use_container_width=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key="table_select_official"
+                )
+                if event_off and hasattr(event_off, "selection") and event_off.selection.rows:
+                    selected_off_idx = event_off.selection.rows[0]
+            except Exception:
+                st.dataframe(df_off, use_container_width=True)
+
+            off_labels = [
+                f"Row {i+1}: [{r.get('question_id','')}] {r.get('model_alias','') or r.get('model','')} — {r.get('tokens_per_sec','')} tok/s | Peak: {r.get('peak_vram_mb','') or r.get('peak_vram_gb','')} | {r.get('timestamp','')}"
+                for i, r in df_off.iterrows()
+            ]
+            default_off_sel = selected_off_idx if selected_off_idx is not None and selected_off_idx < len(off_labels) else 0
+            chosen_off = st.selectbox(
+                "🔍 Click a table row above or pick an official run here to inspect Peak VRAM & reasoning output:",
+                range(len(off_labels)),
+                format_func=lambda i: off_labels[i],
+                index=default_off_sel,
+                key="off_run_detail_picker"
+            )
+            render_past_run_detail(df_off.iloc[chosen_off].to_dict(), OFFICIAL_RESPONSES_DIR)
+
+            st.download_button("📥 Download Official CSV", df_off.to_csv(index=False), file_name="official_comparison_log.csv")
+        else:
+            st.info("Official comparison log is empty.")
     else:
         st.info("No official runs logged yet. Switch to 'Official Benchmark Mode' when ready to collect the 45 deliverables.")
-
-    c_iqid, c_imodel = st.columns(2)
-    with c_iqid:
-        insp_qid = st.selectbox("Inspect Official QID", sorted(BENCHMARK_QUESTIONS.keys()), key="insp_official_qid")
-    with c_imodel:
-        insp_model = st.selectbox("Inspect Official Model", list(REQUIRED_MODELS.keys()), key="insp_official_model")
-    
-    official_target = os.path.join(OFFICIAL_RESPONSES_DIR, get_response_filename(insp_qid, insp_model))
-    if os.path.exists(official_target):
-        with open(official_target, "r", encoding="utf-8") as f:
-            st.json(json.load(f))
-    else:
-        st.caption(f"Artifact `{official_target}` has not been collected yet.")

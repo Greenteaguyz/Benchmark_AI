@@ -206,7 +206,9 @@ function openModal(data) {
   const metrics = data.metrics || {};
   let pills = '';
   if (metrics.total_duration_s !== undefined) {
-    pills += `<div class="modal-metric-pill">⏱️ Total: <b>${metrics.total_duration_s}s</b></div>`;
+    const genS = metrics.generation_duration_s || metrics.eval_duration_s;
+    const durLabel = genS ? `${metrics.total_duration_s}s (Gen: ${genS}s)` : `${metrics.total_duration_s}s`;
+    pills += `<div class="modal-metric-pill">⏱️ Total: <b>${durLabel}</b></div>`;
   }
   if (metrics.output_tokens !== undefined) {
     pills += `<div class="modal-metric-pill">🔢 Tokens: <b>${metrics.output_tokens}</b></div>`;
@@ -214,8 +216,9 @@ function openModal(data) {
   if (metrics.tokens_per_sec !== undefined) {
     pills += `<div class="modal-metric-pill">⚡ Speed: <b>${metrics.tokens_per_sec} tok/s</b></div>`;
   }
-  if (metrics.peak_vram_mb !== undefined) {
-    pills += `<div class="modal-metric-pill">💾 Peak VRAM: <b>${Math.round(metrics.peak_vram_mb)} MB</b></div>`;
+  const vramVal = metrics.peak_vram_mb !== undefined && metrics.peak_vram_mb !== null ? metrics.peak_vram_mb : (metrics.peak_vram_gb ? metrics.peak_vram_gb * 1024 : null);
+  if (vramVal !== null && vramVal !== undefined) {
+    pills += `<div class="modal-metric-pill">💾 Peak VRAM: <b>${Math.round(vramVal)} MB</b></div>`;
   }
   if (metrics.completion_status) {
     const isSuccess = metrics.completion_status === 'Completed';
@@ -362,7 +365,7 @@ async function refreshProgress() {
                 raw_response: artData.response,
                 timestamp: artData.timestamp,
                 filepath: fileName,
-                metrics: {
+                metrics: artData.metrics || {
                   completion_status: 'Completed',
                 }
               });
@@ -433,9 +436,10 @@ async function refreshLogs() {
               filepath: row.evidence_file || fileName,
               metrics: {
                 total_duration_s: row.total_duration_s,
+                generation_duration_s: row.generation_duration_s,
                 output_tokens: row.output_tokens,
                 tokens_per_sec: row.tokens_per_sec,
-                peak_vram_mb: row.peak_vram_mb,
+                peak_vram_mb: row.peak_vram_mb !== undefined ? row.peak_vram_mb : (row.peak_vram_gb ? row.peak_vram_gb * 1024 : undefined),
                 completion_status: row.completion_status,
               }
             });

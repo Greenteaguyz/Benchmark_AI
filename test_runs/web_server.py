@@ -535,11 +535,12 @@ async def api_logs(request):
 
 
 async def api_artifact(request):
-    """Returns the JSON content of a specific artifact file."""
+    """Returns the JSON content of a specific artifact file, merged with telemetry metrics from comparison_log.csv."""
     mode = request.query_params.get("mode", "test")
     filename = request.query_params.get("file", "").strip()
     primary_dir = OFFICIAL_RESPONSES_DIR if mode == "official" else TEST_RESPONSES_DIR
     fallback_dir = TEST_RESPONSES_DIR if mode == "official" else OFFICIAL_RESPONSES_DIR
+    csv_path = OFFICIAL_LOG_CSV_PATH if mode == "official" else TEST_LOG_CSV_PATH
 
     base_fn = os.path.basename(filename)
     candidates = [
@@ -552,7 +553,43 @@ async def api_artifact(request):
         if fp and os.path.exists(fp) and os.path.isfile(fp):
             try:
                 with open(fp, "r", encoding="utf-8") as f:
-                    return JSONResponse(json.load(f))
+                    data = json.load(f)
+
+                # Look up telemetry metrics from comparison_log.csv
+                metrics = {}
+                if os.path.exists(csv_path):
+                    try:
+                        df = pd.read_csv(csv_path, on_bad_lines="warn")
+                        match_row = None
+                        if not df.empty:
+                            if "evidence_file" in df.columns:
+                                m = df[df["evidence_file"].astype(str).str.endswith(base_fn)]
+                                if not m.empty:
+                                    match_row = m.iloc[-1]
+                            if match_row is None and "question_id" in df.columns:
+                                qid = data.get("question_id", base_fn.split("_")[0])
+                                m_qid = df[df["question_id"] == qid]
+                                if not m_qid.empty:
+                                    match_row = m_qid.iloc[-1]
+
+                        if match_row is not None:
+                            vram_val = match_row.get("peak_vram_mb")
+                            if vram_val is None or pd.isna(vram_val):
+                                vram_val = match_row.get("peak_vram_gb")
+                            metrics = {
+                                "total_duration_s": float(match_row.get("total_duration_s", 0)) if not pd.isna(match_row.get("total_duration_s")) else 0,
+                                "generation_duration_s": float(match_row.get("generation_duration_s", 0)) if not pd.isna(match_row.get("generation_duration_s")) else 0,
+                                "output_tokens": int(match_row.get("output_tokens", 0)) if not pd.isna(match_row.get("output_tokens")) else 0,
+                                "tokens_per_sec": float(match_row.get("tokens_per_sec", 0)) if not pd.isna(match_row.get("tokens_per_sec")) else 0,
+                                "peak_vram_mb": float(vram_val) if vram_val is not None and not pd.isna(vram_val) else 0,
+                                "completion_status": str(match_row.get("completion_status", "Completed")),
+                            }
+                    except Exception:
+                        pass
+
+                if metrics:
+                    data["metrics"] = metrics
+                return JSONResponse(data)
             except Exception as e:
                 return JSONResponse({"error": str(e)}, status_code=500)
 
