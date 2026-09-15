@@ -156,3 +156,47 @@ Under frozen settings (`temp=0.0`, `num_ctx=4096`, single model resident in VRAM
 * **Single Model in VRAM:** Explicit model eviction (`keep_alive: 0`) between trials.
 * **No Regeneration:** Every inference run is accepted as produced; technical anomalies are logged.
 * **Privacy & Isolation:** Local Ollama service is bound strictly to `127.0.0.1` and never exposed publicly.
+
+---
+
+## 📄 Google Docs Sync (Optional)
+
+The Streamlit UI (`test_runs/app.py`) can append each scored result to a **Google Doc** of your choice using a free **Google Apps Script** web app (no Google Cloud, no card needed).
+
+### One-time Google setup (~2 minutes)
+1. Open the Google Doc you want results appended to → **Extensions → Apps Script**.
+2. Paste this script and save:
+
+```javascript
+function doPost(e) {
+  try {
+    const doc = DocumentApp.getActiveDocument();
+    const body = doc.getBody();
+    const data = JSON.parse(e.postData.contents);
+    body.appendParagraph("——————————————");
+    body.appendParagraph(data.section_title);
+    body.appendListItem("Fully Correct Rate: " + data.fully_correct_rate + "%");
+    body.appendListItem("Average Quality Score: " + data.avg_quality_score + " / 8");
+    body.appendListItem("Average Response Time: " + data.avg_response_time + " s");
+    body.appendListItem("Tokens/Second: " + data.tokens_per_sec);
+    body.appendListItem("Total Tokens: " + data.total_tokens);
+    return ContentService.createTextOutput(JSON.stringify({ status: "ok" }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+```
+
+3. **Deploy → New deployment → ⚙️ Web app** → *Execute as:* **Me**, *Who has access:* **Anyone** → **Deploy** → authorize → copy the **`…/exec` URL**.
+4. Open the Streamlit app → sidebar **📄 Google Docs Sync** → paste the URL, tick **Enable**.
+
+### How it works
+After each test run, expand **"📝 Score this answer"**, enter the 4 rubric scores (0–2 each, matching the Page 3 rubric), and click **💾 Save Score & Sync to Docs**. The app:
+
+1. Saves the score to `data/scoring_log.csv`.
+2. Computes per-model metrics for the active mode (Test/Official) — Fully Correct Rate, Average Quality Score, Average Response Time, Tokens/sec, Total Tokens.
+3. POSTs those metrics to your Apps Script URL, which appends them to your Google Doc.
+
+Your `/exec` URL is kept in `google_docs_config.json` (gitignored — never push it).

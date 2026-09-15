@@ -382,6 +382,112 @@ def log_comparison_csv(record: dict, csv_path: str):
         df.to_csv(csv_path, mode="a", header=False, index=False)
 
 
+# --- 2.5 Google Docs Sync & Rubric Scoring Helpers ---
+GOOGLE_DOCS_CONFIG_PATH = os.path.join(PROJECT_ROOT, "google_docs_config.json")
+SCORING_LOG_PATH = os.path.join(PROJECT_ROOT, "data", "scoring_log.csv")
+
+
+def load_google_docs_config() -> dict:
+    """Loads the Google Docs sync config (Apps Script /exec URL + enabled flag)."""
+    try:
+        with open(GOOGLE_DOCS_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+    cfg.setdefault("apps_script_url", "")
+    cfg.setdefault("enabled", False)
+    return cfg
+
+
+def save_google_docs_config(cfg: dict):
+    """Persists the Google Docs sync config to disk (gitignored)."""
+    with open(GOOGLE_DOCS_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+
+
+def save_score_record(record: dict):
+    """Appends one human rubric score row to data/scoring_log.csv."""
+    os.makedirs(os.path.dirname(SCORING_LOG_PATH), exist_ok=True)
+    df = pd.DataFrame([record])
+    if not os.path.exists(SCORING_LOG_PATH):
+        df.to_csv(SCORING_LOG_PATH, index=False)
+    else:
+        df.to_csv(SCORING_LOG_PATH, mode="a", header=False, index=False)
+
+
+def _read_csv_quietly(path: str) -> pd.DataFrame:
+    try:
+        if os.path.exists(path):
+            return pd.read_csv(path)
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+
+def compute_model_metrics(model_name: str, mode: str) -> dict:
+    """Aggregates benchmark metrics for one model within a mode (test/official).
+
+    Sources:
+    - Scoring log (data/scoring_log.csv) -> Fully Correct Rate + Average Quality Score
+    - Active mode comparison log -> Average Response Time, Tokens/sec, Total Tokens
+    """
+    comp_path = TEST_LOG_CSV_PATH if mode == "test" else OFFICIAL_LOG_CSV_PATH
+    comp = _read_csv_quietly(comp_path)
+    if not comp.empty and "model" in comp.columns:
+        comp = comp[comp["model"] == model_name]
+
+    scoring = _read_csv_quietly(SCORING_LOG_PATH)
+    if not scoring.empty and "mode" in scoring.columns:
+        scoring = scoring[(scoring["mode"] == mode) & (scoring["model"] == model_name)]
+
+    fully_correct_rate = 0.0
+    avg_quality_score = 0.0
+    avg_response_time = 0.0
+    tokens_per_sec = 0.0
+    total_tokens = 0
+
+    if not scoring.empty and "final_answer" in scoring.columns:
+        total_runs = len(scoring)
+        if total_runs > 0:
+            correct = int((scoring["final_answer"] == 2).sum())
+            fully_correct_rate = round(correct / total_runs * 100, 1)
+            if "total_score" in scoring.columns:
+                avg_quality_score = round(float(scoring["total_score"].mean()), 2)
+
+    if not comp.empty:
+        if "total_duration_s" in comp.columns:
+            avg_response_time = round(float(comp["total_duration_s"].mean()), 2)
+        if "tokens_per_sec" in comp.columns:
+            tokens_per_sec = round(float(comp["tokens_per_sec"].mean()), 2)
+        if "output_tokens" in comp.columns:
+            total_tokens = int(comp["output_tokens"].sum())
+
+    return {
+        "fully_correct_rate": fully_correct_rate,
+        "avg_quality_score": avg_quality_score,
+        "avg_response_time": avg_response_time,
+        "tokens_per_sec": tokens_per_sec,
+        "total_tokens": total_tokens,
+    }
+
+
+def append_result_to_docs(url: str, data: dict) -> tuple[bool, str]:
+    """POSTs the metrics JSON to the Apps Script Web App URL."""
+    try:
+        r = requests.post(url, json=data, timeout=30)
+        if r.status_code == 200:
+            try:
+                resp = r.json()
+                if resp.get("status") == "ok":
+                    return True, "Synced to Google Docs"
+                return False, f"Docs app replied: {resp}"
+            except Exception:
+                return True, f"Sent to Google Docs (HTTP {r.status_code})."
+        return False, f"HTTP {r.status_code}: {r.text[:300]}"
+    except requests.exceptions.RequestException as e:
+        return False, f"Connection failed: {e}"
+
+
 # --- 3. Streamlit Page Setup ---
 st.set_page_config(
     page_title="LLM Reasoning Benchmark (8GB VRAM)",
@@ -501,6 +607,36 @@ with st.sidebar:
             4. **Factual Support:** 2 = No invented claims | 1 = Minor claim | 0 = Major hallucinations
             """
         )
+
+    # Google Docs Sync Card
+    st.divider()
+    st.markdown("#### 📄 Google Docs Sync")
+    _gd_cfg = load_google_docs_config()
+    _gd_url = st.text_input(
+        "Apps Script `/exec` URL",
+        value=_gd_cfg["apps_script_url"],
+        key="gd_url_input",
+        placeholder="https://script.google.com/macros/s/.../exec",
+        help="Paste the Web app URL from your Google Apps Script deployment.",
+    )
+    _gd_enabled = st.checkbox(
+        "Enable auto-sync to Google Docs",
+        value=bool(_gd_cfg["enabled"]),
+        key="gd_enable_toggle",
+        help="When ON, saving a score also appends the metrics to your Google Doc.",
+    )
+
+    if _gd_url != _gd_cfg["apps_script_url"] or _gd_enabled != _gd_cfg["enabled"]:
+        save_google_docs_config({"apps_script_url": _gd_url, "enabled": _gd_enabled})
+        _gd_cfg = {"apps_script_url": _gd_url, "enabled": _gd_enabled}
+
+    if _gd_enabled:
+        if not _gd_url.strip():
+            st.error("Copy your Apps Script **/exec URL** above to enable syncing.", icon="🔗")
+        else:
+            st.caption("Status: ✅ will send results → your Google Doc after you save a score.")
+    else:
+        st.caption("Status: ⏸️ Docs sync is OFF.")
 
 # --- 5. Main Workspace: Test & Comparison Tool (Page 6 Spec) ---
 st.subheader("🔬 Local Model Testing & Evidence Collection")
@@ -903,6 +1039,69 @@ def render_benchmark_control_panel():
             st.markdown("#### Verified Output")
             st.markdown(format_latex_for_display(res["final_ans"]))
             st.success(f"💾 Evidence saved to: `{res['saved_filepath']}` (conforming to docs/response_schema.json)", icon="📁")
+
+            # Human rubric scoring + optional Google Docs sync
+            mode_str = "test" if is_test_mode else "official"
+            with st.expander("📝 Score this answer (rubric 0–2)", expanded=True):
+                st.caption("Human rubric scoring — matches the Page 3 rubric shown in the sidebar.")
+                sc1, sc2, sc3, sc4 = st.columns(4)
+                _score_key = f"{res['question_id']}_{res['model_alias']}"
+                with sc1:
+                    s_final = st.selectbox("Final Answer", [0, 1, 2], index=1, key=f"score_final_{_score_key}",
+                                           help="2 = Correct | 1 = Partly correct | 0 = Incorrect")
+                with sc2:
+                    s_reason = st.selectbox("Reasoning Quality", [0, 1, 2], index=1, key=f"score_reason_{_score_key}",
+                                            help="2 = Clear & logical | 1 = Minor gap | 0 = Illogical")
+                with sc3:
+                    s_instr = st.selectbox("Instruction Following", [0, 1, 2], index=1, key=f"score_instr_{_score_key}",
+                                           help="2 = Fully follows | 1 = Partly follows | 0 = Fails")
+                with sc4:
+                    s_fact = st.selectbox("Factual Support", [0, 1, 2], index=1, key=f"score_fact_{_score_key}",
+                                          help="2 = No invented claims | 1 = Minor claim | 0 = Major hallucinations")
+
+                total_score = s_final + s_reason + s_instr + s_fact
+                st.caption(f"Total Score: **{total_score} / 8**")
+
+                if st.button("💾 Save Score & Sync to Docs", key=f"save_score_{_score_key}", use_container_width=True):
+                    score_record = {
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "mode": mode_str,
+                        "question_id": res["question_id"],
+                        "model": res["model"],
+                        "model_alias": res["model_alias"],
+                        "final_answer": s_final,
+                        "reasoning_quality": s_reason,
+                        "instruction_following": s_instr,
+                        "factual_support": s_fact,
+                        "total_score": total_score,
+                    }
+                    save_score_record(score_record)
+                    st.success(f"✅ Saved score (**{total_score}/8**) to `data/scoring_log.csv`.", icon="📝")
+
+                    metrics = compute_model_metrics(res["model"], mode_str)
+                    _gd_cfg2 = load_google_docs_config()
+                    _gd_url2 = _gd_cfg2.get("apps_script_url", "")
+                    _gd_on2 = _gd_cfg2.get("enabled", False)
+
+                    if _gd_on2 and _gd_url2.strip():
+                        payload = {
+                            "section_title": f"{res['question_id']} · {res['model_alias']} · {res['timestamp']} · {mode_str.upper()}",
+                            "fully_correct_rate": metrics["fully_correct_rate"],
+                            "avg_quality_score": metrics["avg_quality_score"],
+                            "avg_response_time": metrics["avg_response_time"],
+                            "tokens_per_sec": metrics["tokens_per_sec"],
+                            "total_tokens": metrics["total_tokens"],
+                        }
+                        ok, msg = append_result_to_docs(_gd_url2, payload)
+                        if ok:
+                            st.success(f"📄 {msg}: `{payload['section_title']}`", icon="✅")
+                        else:
+                            st.error(f"📄 {msg}", icon="❌")
+                    else:
+                        st.info(
+                            "📄 Docs sync is **OFF** — this score was saved locally only. Enable it in the sidebar to start appending results to your Google Doc.",
+                            icon="ℹ️",
+                        )
 
 
 # Render the isolated benchmark control panel
