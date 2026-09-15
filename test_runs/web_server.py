@@ -139,6 +139,47 @@ BENCHMARK_QUESTIONS = {
 }
 
 # --- 2. Helper Functions ---
+def wait_for_model_evicted(model_name: str, timeout: float = 20.0) -> bool:
+    """Polls Ollama /api/ps until a model is fully released from VRAM."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            r = requests.get(f"{OLLAMA_API_BASE}/api/ps", timeout=2)
+            if r.status_code == 200:
+                loaded = [m["name"] for m in r.json().get("models", [])]
+                if not any(
+                    model_name == m or m.startswith(f"{model_name}:")
+                    for m in loaded
+                ):
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def evict_model(model_name: str, wait: bool = True) -> bool:
+    """Sends keep_alive: 0 and waits for the model to be unmapped from VRAM."""
+    try:
+        requests.post(f"{OLLAMA_API_BASE}/api/generate", json={"model": model_name, "keep_alive": 0}, timeout=5)
+        if wait:
+            wait_for_model_evicted(model_name)
+        return True
+    except Exception:
+        return False
+
+
+def evict_all_models(wait: bool = True) -> None:
+    """Evicts every model currently resident in VRAM."""
+    try:
+        r = requests.get(f"{OLLAMA_API_BASE}/api/ps", timeout=2)
+        if r.status_code == 200:
+            for m in r.json().get("models", []):
+                evict_model(m["name"], wait=wait)
+    except Exception:
+        pass
+
+
 def get_peak_vram_mb() -> float:
     """Reads current GPU VRAM utilization via nvidia-smi."""
     try:
@@ -276,19 +317,38 @@ async def api_progress(request):
 
 
 async def api_vram_load(request):
-    """Pre-loads a model into VRAM without sending a prompt."""
+    """Pre-loads a model into VRAM without sending a prompt.
+
+    Evicts any other resident model first (to avoid 8 GB VRAM OOM) and retries
+    transient connection drops caused by a crashed runner.
+    """
     data = await request.json()
     model_name = data.get("model", "")
     if not model_name:
         return JSONResponse({"success": False, "error": "Missing model"}, status_code=400)
 
-    try:
-        r = requests.post(f"{OLLAMA_API_BASE}/api/generate", json={"model": model_name, "keep_alive": "10m"}, timeout=120)
-        if r.status_code == 200:
-            return JSONResponse({"success": True, "message": f"Loaded {model_name} into VRAM"})
-        return JSONResponse({"success": False, "error": r.text}, status_code=500)
-    except Exception as e:
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+    evict_all_models(wait=True)
+
+    max_attempts = 4
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            r = requests.post(f"{OLLAMA_API_BASE}/api/generate", json={"model": model_name, "keep_alive": "10m"}, timeout=120)
+            if r.status_code == 200:
+                return JSONResponse({"success": True, "message": f"Loaded {model_name} into VRAM"})
+            return JSONResponse({"success": False, "error": r.text}, status_code=500)
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
+            last_err = e
+            await asyncio.sleep(2 * attempt)
+        except Exception as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    return JSONResponse({
+        "success": False,
+        "error": f"{last_err}. The Ollama runner likely crashed while loading {model_name} "
+                 f"(usually VRAM exhaustion on an 8 GB GPU). Ensure VRAM is free, then retry. "
+                 f"Check the `ollama serve` logs for a CUDA OOM error.",
+    }, status_code=500)
 
 
 async def api_vram_evict(request):
@@ -299,17 +359,14 @@ async def api_vram_evict(request):
         return JSONResponse({"success": False, "error": "Missing model"}, status_code=400)
 
     try:
-        targets = [model_name]
+targets = [model_name]
         if ":" not in model_name:
             targets.append(f"{model_name}:latest")
         else:
             targets.append(model_name.split(":")[0])
 
-        for t in targets:
-            try:
-                requests.post(f"{OLLAMA_API_BASE}/api/generate", json={"model": t, "keep_alive": 0}, timeout=5)
-            except Exception:
-                pass
+        for t in dict.fromkeys(targets):
+            evict_model(t, wait=True)
         return JSONResponse({"success": True, "message": f"Evicted {model_name} from VRAM"})
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)

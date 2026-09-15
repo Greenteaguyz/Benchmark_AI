@@ -238,6 +238,36 @@ def evict_ollama_model(model_name: str = None) -> bool:
         return False
 
 
+def wait_for_model_evicted(model_name: str, timeout: float = 20.0) -> bool:
+    """Polls Ollama /api/ps until a model is fully released from VRAM.
+
+    Ollama's keep_alive: 0 request returns before the model is actually
+    unmapped from GPU memory. Loading a new model during that window can
+    exceed the 8 GB VRAM budget and crash the runner.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        get_loaded_models.clear()
+        loaded = get_loaded_models()
+        if not any(
+            model_name == m or m.startswith(f"{model_name}:")
+            for m in loaded
+        ):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def evict_all_models(timeout_per_model: float = 20.0) -> list[str]:
+    """Evicts every model currently resident in VRAM and waits for release."""
+    evicted = []
+    for m in get_loaded_models():
+        if evict_ollama_model(m):
+            wait_for_model_evicted(m, timeout=timeout_per_model)
+            evicted.append(m)
+    return evicted
+
+
 @st.cache_data(ttl=3, show_spinner=False)
 def get_loaded_models() -> list[str]:
     """Queries Ollama /api/ps to retrieve models currently active in VRAM (cached for 3s)."""
@@ -261,19 +291,35 @@ def is_model_loaded_in_vram(model_name: str, loaded_models: list[str]) -> bool:
 
 
 def load_model_into_vram(model_name: str) -> tuple[bool, str]:
-    """Pre-loads/warms up a model into GPU memory via Ollama API without generating text."""
-    try:
-        r = requests.post(
-            f"{OLLAMA_API_BASE}/api/generate",
-            json={"model": model_name, "keep_alive": "10m"},
-            timeout=120,
-        )
-        get_loaded_models.clear()
-        if r.status_code == 200:
-            return True, f"Model `{model_name}` successfully loaded into VRAM."
-        return False, f"Failed to load `{model_name}`: {r.text}"
-    except Exception as e:
-        return False, f"Loading error: {e}"
+    """Pre-loads/warms up a model into GPU memory via Ollama API without generating text.
+
+    Retries transient connection drops (the Ollama runner is briefly killed and
+    restarted on VRAM exhaustion) with linear backoff before failing.
+    """
+    max_attempts = 4
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            r = requests.post(
+                f"{OLLAMA_API_BASE}/api/generate",
+                json={"model": model_name, "keep_alive": "10m"},
+                timeout=120,
+            )
+            get_loaded_models.clear()
+            if r.status_code == 200:
+                return True, f"Model `{model_name}` successfully loaded into VRAM."
+            return False, f"Failed to load `{model_name}`: {r.text}"
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
+            last_err = e
+            time.sleep(2 * attempt)  # give the runner time to restart before retrying
+        except Exception as e:
+            return False, f"Loading error: {e}"
+    return False, (
+        f"Loading error: {last_err}. The Ollama runner likely crashed while loading "
+        f"`{model_name}` (usually VRAM exhaustion on an 8 GB GPU). Make sure no other "
+        f"model is resident in VRAM (`🧹 Free VRAM` first), then retry. If the problem "
+        f"persists, check the `ollama serve` logs for a CUDA OOM error."
+    )
 
 
 def pull_ollama_model(model_name: str) -> tuple[bool, str]:
@@ -520,9 +566,10 @@ def render_benchmark_control_panel():
 
         # Automatic VRAM eviction if user switches models to avoid 8GB VRAM saturation
         if st.session_state.get("last_loaded_model") and st.session_state["last_loaded_model"] != selected_model:
-            old_model = st.session_state["last_loaded_model"]
-            with st.spinner(f"Releasing `{old_model}` from VRAM..."):
-                evict_ollama_model(old_model)
+prev_model = st.session_state["last_loaded_model"]
+            if evict_ollama_model(prev_model):
+                with st.spinner(f"Releasing `{prev_model}` from VRAM..."):
+                    wait_for_model_evicted(prev_model)
             st.session_state["last_loaded_model"] = selected_model
             # Clear previous model's output card so screen doesn't stay stuck on old telemetry
             st.session_state["latest_result"] = None
@@ -573,7 +620,9 @@ def render_benchmark_control_panel():
         with col_act2:
             unload_disabled = not m_loaded
             if st.button("🧹 Free VRAM", key="evict_vram_btn", disabled=unload_disabled, help="Evicts model from 8 GB VRAM to free GPU memory"):
-                evict_ollama_model(selected_model)
+                with st.spinner(f"Releasing `{selected_model}` from VRAM... This may take a few seconds."):
+                    evict_ollama_model(selected_model)
+                    wait_for_model_evicted(selected_model)
                 st.toast(f"Evicted `{selected_model}` from VRAM!", icon="🧹")
                 st.rerun()
 
