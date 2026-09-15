@@ -467,8 +467,12 @@ def compute_model_metrics(model_name: str, mode: str) -> dict:
 
 def append_result_to_docs(url: str, data: dict) -> tuple[bool, str]:
     """POSTs the metrics JSON to the Apps Script Web App URL."""
+    clean_url = url.strip()
+    if "docs.google.com/document" in clean_url:
+        return False, "You pasted your Google Doc document URL. Please paste the Apps Script Web App URL (starts with https://script.google.com/macros/s/... and ends with /exec). See instructions below."
+
     try:
-        r = requests.post(url, json=data, timeout=30)
+        r = requests.post(clean_url, json=data, timeout=30)
         if r.status_code == 200:
             try:
                 resp = r.json()
@@ -477,6 +481,8 @@ def append_result_to_docs(url: str, data: dict) -> tuple[bool, str]:
                 return False, f"Docs app replied: {resp}"
             except Exception:
                 return True, f"Sent to Google Docs (HTTP {r.status_code})."
+        if r.status_code == 405:
+            return False, "HTTP 405 (Method Not Allowed). Make sure you deployed your Apps Script as a 'Web app' with 'doPost(e)', and that you copied the URL ending with '/exec'."
         return False, f"HTTP {r.status_code}: {r.text[:300]}"
     except requests.exceptions.RequestException as e:
         return False, f"Connection failed: {e}"
@@ -613,6 +619,11 @@ with st.sidebar:
         placeholder="https://script.google.com/macros/s/.../exec",
         help="Paste the Web app URL from your Google Apps Script deployment.",
     )
+    if "docs.google.com/document" in _gd_url:
+        st.warning(
+            "⚠️ That looks like your Google Doc link, not your Apps Script Web App URL! "
+            "Please open your Google Doc, go to **Extensions → Apps Script → Deploy → Web app**, and copy the URL ending with `/exec`."
+        )
     _gd_enabled = st.checkbox(
         "Enable auto-sync to Google Docs",
         value=bool(_gd_cfg["enabled"]),
