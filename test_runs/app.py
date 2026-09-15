@@ -1086,6 +1086,11 @@ def render_benchmark_control_panel():
                     if _gd_on2 and _gd_url2.strip():
                         payload = {
                             "section_title": f"{res['question_id']} · {res['model_alias']} · {res['timestamp']} · {mode_str.upper()}",
+                            "question_id": res["question_id"],
+                            "model": res["model"],
+                            "model_alias": res["model_alias"],
+                            "question": res.get("prompt", ""),
+                            "total_score": total_score,
                             "fully_correct_rate": metrics["fully_correct_rate"],
                             "avg_quality_score": metrics["avg_quality_score"],
                             "avg_response_time": metrics["avg_response_time"],

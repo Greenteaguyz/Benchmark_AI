@@ -173,13 +173,48 @@ function doPost(e) {
     const doc = DocumentApp.getActiveDocument();
     const body = doc.getBody();
     const data = JSON.parse(e.postData.contents);
-    body.appendParagraph("——————————————");
-    body.appendParagraph(data.section_title);
-    body.appendListItem("Fully Correct Rate: " + data.fully_correct_rate + "%");
-    body.appendListItem("Average Quality Score: " + data.avg_quality_score + " / 8");
-    body.appendListItem("Average Response Time: " + data.avg_response_time + " s");
-    body.appendListItem("Tokens/Second: " + data.tokens_per_sec);
-    body.appendListItem("Total Tokens: " + data.total_tokens);
+
+    const modelKey = (data.model_alias || data.model || "Unknown").toString().toUpperCase();
+    const headingText = "📊 MODEL: " + modelKey;
+
+    const lines = [];
+    lines.push({ text: "——————————————", list: false });
+    lines.push({ text: data.section_title, list: false });
+    if (data.question) lines.push({ text: "🧐 Question: " + data.question, list: false });
+    lines.push({ text: "Fully Correct Rate: " + data.fully_correct_rate + "%", list: true });
+    lines.push({ text: "Average Quality Score: " + data.avg_quality_score + " / 8", list: true });
+    lines.push({ text: "Average Response Time: " + data.avg_response_time + " s", list: true });
+    lines.push({ text: "Tokens/Second: " + data.tokens_per_sec, list: true });
+    lines.push({ text: "Total Tokens: " + data.total_tokens, list: true });
+    if (data.total_score !== undefined && data.total_score !== null) {
+      lines.push({ text: "🧑‍💻 Rubric Score: " + data.total_score + " / 8", list: true });
+    }
+
+    const paragraphs = body.getParagraphs();
+    let found = -1;
+    for (let i = 0; i < paragraphs.length; i++) {
+      if (paragraphs[i].getText() === headingText) { found = i; break; }
+    }
+
+    if (found === -1) {
+      // No section yet: create it at the very bottom of the doc
+      body.appendParagraph(headingText).setHeading(DocumentApp.ParagraphHeading.HEADING2);
+      lines.forEach(function (ln) {
+        if (ln.list) body.appendListItem(ln.text); else body.appendParagraph(ln.text);
+      });
+    } else {
+      // Insert this result before the next model heading (or the end)
+      let until = paragraphs.length;
+      for (let j = found + 1; j < paragraphs.length; j++) {
+        if (paragraphs[j].getText().indexOf("📊 MODEL:") === 0) { until = j; break; }
+      }
+      let idx = (until < paragraphs.length) ? paragraphs[until].getIndex() : body.getNumChildren();
+      lines.forEach(function (ln) {
+        if (ln.list) body.insertListItem(idx, ln.text); else body.insertParagraph(idx, ln.text);
+        idx++;
+      });
+    }
+
     return ContentService.createTextOutput(JSON.stringify({ status: "ok" }))
       .setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
@@ -197,6 +232,6 @@ After each test run, expand **"📝 Score this answer"**, enter the 4 rubric sco
 
 1. Saves the score to `data/scoring_log.csv`.
 2. Computes per-model metrics for the active mode (Test/Official) — Fully Correct Rate, Average Quality Score, Average Response Time, Tokens/sec, Total Tokens.
-3. POSTs those metrics to your Apps Script URL, which appends them to your Google Doc.
+3. POSTs those metrics to your Apps Script URL, which appends them to your Google Doc **under a per-model section** (e.g. `📊 MODEL: PHI`). Each model keeps its own area; future results for that model are inserted into its section instead of piling up at the bottom.
 
 Your `/exec` URL is kept in `google_docs_config.json` (gitignored — never push it).
