@@ -359,7 +359,7 @@ async def api_vram_evict(request):
         return JSONResponse({"success": False, "error": "Missing model"}, status_code=400)
 
     try:
-targets = [model_name]
+        targets = [model_name]
         if ":" not in model_name:
             targets.append(f"{model_name}:latest")
         else:

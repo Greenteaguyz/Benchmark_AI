@@ -566,7 +566,7 @@ def render_benchmark_control_panel():
 
         # Automatic VRAM eviction if user switches models to avoid 8GB VRAM saturation
         if st.session_state.get("last_loaded_model") and st.session_state["last_loaded_model"] != selected_model:
-prev_model = st.session_state["last_loaded_model"]
+            prev_model = st.session_state["last_loaded_model"]
             if evict_ollama_model(prev_model):
                 with st.spinner(f"Releasing `{prev_model}` from VRAM..."):
                     wait_for_model_evicted(prev_model)
