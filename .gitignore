@@ -20,3 +20,8 @@ Thumbs.db
 
 # Google Docs sync (contains private Apps Script /exec URL)
 google_docs_config.json
+
+# Temporary lock and backup files
+*.lock
+*.bak
+

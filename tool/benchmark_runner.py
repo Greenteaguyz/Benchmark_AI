@@ -18,6 +18,8 @@ import argparse
 import subprocess
 import requests
 
+from excel_sync import sync_official_benchmark_to_excel
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR) if os.path.basename(CURRENT_DIR) == "tool" else CURRENT_DIR
 
@@ -223,6 +225,26 @@ def run_benchmark_item(qid: str, model_alias: str) -> dict:
     print(f"  [+] Saved response to: {file_path}")
     print(f"  [+] Telemetry logged to: {LOG_CSV_PATH}")
     print(f"  [+] Metrics: {out_tokens} tokens in {gen_dur_s}s ({tps} tok/s) | Peak VRAM: {peak_vram} GB")
+
+    # Real-time Master Excel sync
+    excel_record = {
+        "timestamp": start_iso,
+        "question_id": qid,
+        "model": m_info["name"],
+        "model_alias": model_alias,
+        "total_duration_s": response_payload["total_duration_s"],
+        "generation_duration_s": gen_dur_s,
+        "output_tokens": out_tokens,
+        "tokens_per_sec": tps,
+        "peak_vram_gb": peak_vram,
+        "completion_status": response_payload["status"],
+        "evidence_file": file_path,
+    }
+    sync_official_benchmark_to_excel(excel_record, response_payload["response"])
+
+    # Automated VRAM Freeing after benchmark completion (Page 2 clean baseline)
+    evict_models()
+    print(f"  [+] Auto-freed VRAM: model evicted from GPU memory for clean baseline.")
 
     return response_payload
 

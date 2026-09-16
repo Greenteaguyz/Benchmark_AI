@@ -63,17 +63,33 @@ def append_record_row(record: dict, csv_path: str) -> None:
 
     with _locked(csv_path + ".lock"):
         size = os.path.getsize(csv_path) if os.path.exists(csv_path) else 0
+        row = dict(record)
+
         if size == 0:
             with open(csv_path, "a", encoding="utf-8", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=list(record.keys()), extrasaction="ignore", restval="", lineterminator="\n")
+                writer = csv.DictWriter(f, fieldnames=list(row.keys()), extrasaction="ignore", restval="", lineterminator="\n")
                 writer.writeheader()
-                writer.writerow(record)
+                writer.writerow(row)
             return
 
         with open(csv_path, "r", encoding="utf-8", newline="") as f:
             header = next(csv.reader(f), None)
-        fieldnames = header if header else list(record.keys())
-        row_bytes = _record_bytes(record, fieldnames)
+        fieldnames = header if header else list(row.keys())
+
+        # Align synonymous VRAM fields across different log schemas (MB vs GB header)
+        if "peak_vram_gb" in fieldnames and "peak_vram_gb" not in row:
+            if "peak_vram_mb" in row:
+                row["peak_vram_gb"] = row["peak_vram_mb"]
+        if "peak_vram_mb" in fieldnames and "peak_vram_mb" not in row:
+            if "peak_vram_gb" in row:
+                v = row["peak_vram_gb"]
+                try:
+                    num = float(v)
+                    row["peak_vram_mb"] = round(num * 1024, 0) if 0 < num <= 100 else num
+                except (ValueError, TypeError):
+                    row["peak_vram_mb"] = v
+
+        row_bytes = _record_bytes(row, fieldnames)
 
         with open(csv_path, "ab+") as f:
             f.seek(-1, os.SEEK_END)

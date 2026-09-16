@@ -1,0 +1,7 @@
+{
+  "question_id": "Q02",
+  "model": "deepseek-r1:7b",
+  "prompt": "A store offers a 20% discount on an item originally priced at $80. What is the final sale price? Show your work.",
+  "response": "<think>\nFirst, I need to calculate the discount amount by finding 20% of the original price of $80.\n\nNext, I'll subtract the discount from the original price to determine the final sale price.\n\n</think>\n\nTo determine the final sale price after applying a 20% discount to an item originally priced at \\$80, follow these steps:\n\n1. **Calculate the Discount Amount:**\n   \n   \\[\n   \\text{Discount} = \\text{Original Price} \\times \\text{Discount Rate} = 80 \\times 0.20 = 16\n   \\]\n\n2. **Subtract the Discount from the Original Price:**\n   \n   \\[\n   \\text{Final Sale Price} = \\text{Original Price} - \\text{Discount} = 80 - 16 = 64\n   \\]\n\n**Final Answer:**\n\n\\[\n\\boxed{64}\n\\]",
+  "timestamp": "2026-09-16T04:44:32Z"
+}

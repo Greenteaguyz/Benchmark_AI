@@ -20,6 +20,7 @@ from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 
 from csv_utils import append_record_row
+from excel_sync import sync_official_benchmark_to_excel
 
 # --- 1. Constants & Directory Paths ---
 OLLAMA_API_BASE = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -492,10 +493,17 @@ async def api_generate_stream(request):
                 "output_tokens": eval_count,
                 "tokens_per_sec": tokens_per_sec,
                 "peak_vram_mb": peak_vram,
+                "peak_vram_gb": peak_vram,
                 "completion_status": completion_status,
                 "evidence_file": saved_filepath,
             }
             log_comparison_csv(log_record, target_csv)
+            excel_synced = False
+            if is_official:
+                excel_synced, _ = sync_official_benchmark_to_excel(log_record, full_response)
+
+            # Automated VRAM Freeing after benchmark completion (Page 2 clean baseline)
+            evict_model(model_name, wait=True)
 
             final_data = {
                 "done": True,
@@ -510,6 +518,7 @@ async def api_generate_stream(request):
                     "tokens_per_sec": tokens_per_sec,
                     "peak_vram_mb": peak_vram,
                     "completion_status": completion_status,
+                    "vram_freed": True,
                 }
             }
             yield f"data: {json.dumps(final_data)}\n\n"
@@ -528,6 +537,16 @@ async def api_logs(request):
     if os.path.exists(csv_path):
         try:
             df = pd.read_csv(csv_path, on_bad_lines="warn")
+            if "peak_vram_gb" in df.columns and "peak_vram_mb" not in df.columns:
+                def _norm_vram(val):
+                    if pd.isna(val) or str(val).strip() == "":
+                        return None
+                    try:
+                        n = float(val)
+                        return round(n * 1024, 0) if 0 < n <= 100 else n
+                    except (ValueError, TypeError):
+                        return None
+                df["peak_vram_mb"] = df["peak_vram_gb"].apply(_norm_vram)
             return JSONResponse({"success": True, "rows": df.to_dict(orient="records")})
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e), "rows": []})
@@ -580,12 +599,19 @@ async def api_artifact(request):
                             vram_val = match_row.get("peak_vram_mb")
                             if vram_val is None or pd.isna(vram_val):
                                 vram_val = match_row.get("peak_vram_gb")
+                            vram_float = 0.0
+                            if vram_val is not None and not pd.isna(vram_val) and str(vram_val).strip() != "":
+                                try:
+                                    n = float(vram_val)
+                                    vram_float = round(n * 1024, 0) if 0 < n <= 100 else n
+                                except (ValueError, TypeError):
+                                    pass
                             metrics = {
                                 "total_duration_s": float(match_row.get("total_duration_s", 0)) if not pd.isna(match_row.get("total_duration_s")) else 0,
                                 "generation_duration_s": float(match_row.get("generation_duration_s", 0)) if not pd.isna(match_row.get("generation_duration_s")) else 0,
                                 "output_tokens": int(match_row.get("output_tokens", 0)) if not pd.isna(match_row.get("output_tokens")) else 0,
                                 "tokens_per_sec": float(match_row.get("tokens_per_sec", 0)) if not pd.isna(match_row.get("tokens_per_sec")) else 0,
-                                "peak_vram_mb": float(vram_val) if vram_val is not None and not pd.isna(vram_val) else 0,
+                                "peak_vram_mb": vram_float,
                                 "completion_status": str(match_row.get("completion_status", "Completed")),
                             }
                     except Exception:

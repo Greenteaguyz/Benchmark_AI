@@ -13,7 +13,14 @@ import pandas as pd
 import requests
 import streamlit as st
 
+import importlib
+import csv_utils
+importlib.reload(csv_utils)
 from csv_utils import append_record_row
+
+import excel_sync
+importlib.reload(excel_sync)
+from excel_sync import sync_official_benchmark_to_excel, flush_pending_syncs, get_pending_sync_count
 
 # --- 1. Guidelines & Controlled Experiment Constants (Page 2 & 6) ---
 OLLAMA_API_BASE = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -378,6 +385,13 @@ def save_response_artifact(qid: str, model_name: str, prompt: str, response_text
 
 def log_comparison_csv(record: dict, csv_path: str):
     """Appends benchmark measurement record to comparison_log.csv (lock + trailing newline)."""
+    # Ensure both peak_vram_mb and peak_vram_gb are populated so any target CSV schema receives the value
+    vram = record.get("peak_vram_mb")
+    if vram is None or str(vram).strip() == "":
+        vram = record.get("peak_vram_gb")
+    if vram is not None and str(vram).strip() != "":
+        record["peak_vram_mb"] = vram
+        record["peak_vram_gb"] = vram
     append_record_row(record, csv_path)
 
 
@@ -596,6 +610,19 @@ with st.sidebar:
     with st.expander("View 45-File Coverage Table", expanded=False):
         st.dataframe(pd.DataFrame(matrix_data), hide_index=True, use_container_width=True)
 
+    # Master Excel Auto-Sync Status & Flush
+    pending_sync_cnt = get_pending_sync_count()
+    if pending_sync_cnt > 0:
+        st.warning(f"⏳ **{pending_sync_cnt} run(s) queued for Excel.** Close `master_scoring.xlsx` in Excel if open, then flush:", icon="📝")
+        if st.button("🔄 Flush Queued Syncs to Excel", key="flush_pending_excel_btn", use_container_width=True):
+            f_ok, f_msg = flush_pending_syncs()
+            if f_ok:
+                st.success(f_msg, icon="✅")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error(f_msg, icon="❌")
+
     # Official Rubric Drawer (Page 3)
     with st.expander("📖 Scoring Rubric Reference"):
         st.markdown(
@@ -723,12 +750,21 @@ def render_benchmark_control_panel():
         )
         st.session_state["active_selected_model"] = selected_model
 
-        auto_load = st.checkbox(
-            "⚡ Auto-load into VRAM on switch",
-            value=False,
-            key="auto_load_model_vram",
-            help="Automatically pre-loads weights into GPU memory whenever you change models."
-        )
+        col_chk1, col_chk2 = st.columns(2)
+        with col_chk1:
+            auto_load = st.checkbox(
+                "⚡ Auto-load into VRAM on switch",
+                value=False,
+                key="auto_load_model_vram",
+                help="Automatically pre-loads weights into GPU memory whenever you change models."
+            )
+        with col_chk2:
+            auto_free_vram = st.checkbox(
+                "🧹 Auto-free VRAM after test",
+                value=True,
+                key="auto_free_vram_after_test",
+                help="Automatically unloads the model from VRAM immediately after each benchmark finishes, ensuring a completely clean GPU state for the next test."
+            )
 
         # Automatic VRAM eviction if user switches models to avoid 8GB VRAM saturation
         if st.session_state.get("last_loaded_model") and st.session_state["last_loaded_model"] != selected_model:
@@ -988,10 +1024,19 @@ def render_benchmark_control_panel():
                                 "output_tokens": eval_count,
                                 "tokens_per_sec": tokens_per_sec,
                                 "peak_vram_mb": peak_vram,
+                                "peak_vram_gb": peak_vram,
                                 "completion_status": completion_status,
                                 "evidence_file": saved_filepath,
                             }
                             log_comparison_csv(log_record, active_csv_path)
+
+                            # Real-time Master Excel Sync (Official Mode)
+                            if not is_test_mode:
+                                sync_ok, sync_msg = sync_official_benchmark_to_excel(log_record, full_raw_response)
+                                if sync_ok:
+                                    st.toast(f"📊 Synced {current_qid}_{m_info['alias']} to Master Excel!", icon="✅")
+                                else:
+                                    st.toast(sync_msg, icon="ℹ️")
 
                             # Store latest result in session state
                             st.session_state["latest_result"] = {
@@ -1013,6 +1058,13 @@ def render_benchmark_control_panel():
                                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                             }
                             inference_success = True
+
+                            # Automated VRAM Freeing after benchmark completion (Page 2 clean baseline)
+                            if st.session_state.get("auto_free_vram_after_test", True):
+                                evict_ollama_model(selected_model)
+                                wait_for_model_evicted(selected_model)
+                                st.session_state["last_loaded_model"] = None
+                                st.toast("🧹 Auto-freed VRAM: GPU memory released for next benchmark!", icon="✨")
 
                     else:
                         err_text = resp.text

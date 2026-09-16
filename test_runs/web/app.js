@@ -216,8 +216,14 @@ function openModal(data) {
   if (metrics.tokens_per_sec !== undefined) {
     pills += `<div class="modal-metric-pill">⚡ Speed: <b>${metrics.tokens_per_sec} tok/s</b></div>`;
   }
-  const vramVal = metrics.peak_vram_mb !== undefined && metrics.peak_vram_mb !== null ? metrics.peak_vram_mb : (metrics.peak_vram_gb ? metrics.peak_vram_gb * 1024 : null);
-  if (vramVal !== null && vramVal !== undefined) {
+  let vramVal = null;
+  if (metrics.peak_vram_mb !== undefined && metrics.peak_vram_mb !== null && metrics.peak_vram_mb !== '') {
+    vramVal = parseFloat(metrics.peak_vram_mb);
+  } else if (metrics.peak_vram_gb !== undefined && metrics.peak_vram_gb !== null && metrics.peak_vram_gb !== '') {
+    const rawGb = parseFloat(metrics.peak_vram_gb);
+    vramVal = (rawGb > 0 && rawGb <= 100) ? rawGb * 1024 : rawGb;
+  }
+  if (vramVal !== null && !isNaN(vramVal)) {
     pills += `<div class="modal-metric-pill">💾 Peak VRAM: <b>${Math.round(vramVal)} MB</b></div>`;
   }
   if (metrics.completion_status) {
@@ -403,6 +409,16 @@ async function refreshLogs() {
       const tr = document.createElement('tr');
       tr.style.cursor = 'pointer';
       tr.title = 'Click to pop out past thinking & output dialog';
+      const vramRaw = (row.peak_vram_mb !== undefined && row.peak_vram_mb !== null && row.peak_vram_mb !== '')
+        ? row.peak_vram_mb
+        : row.peak_vram_gb;
+      const vramNum = parseFloat(vramRaw);
+      let vramDisplay = 'N/A';
+      if (!isNaN(vramNum)) {
+        const inMb = (vramNum > 0 && vramNum <= 100) ? Math.round(vramNum * 1024) : Math.round(vramNum);
+        vramDisplay = `${inMb} MB`;
+      }
+
       tr.innerHTML = `
         <td style="font-family:var(--font-mono);font-size:0.75rem;">${row.timestamp || ''}</td>
         <td><b>${row.question_id || ''}</b></td>
@@ -410,7 +426,7 @@ async function refreshLogs() {
         <td>${row.total_duration_s ? row.total_duration_s + 's' : ''}</td>
         <td>${row.output_tokens || 0}</td>
         <td>${row.tokens_per_sec || 0}</td>
-        <td>${Math.round(row.peak_vram_mb || 0)} MB</td>
+        <td>${vramDisplay}</td>
         <td><span class="badge ${row.completion_status === 'Completed' ? 'badge-green' : 'badge-amber'}">${row.completion_status}</span></td>
       `;
 
@@ -923,6 +939,10 @@ function finishInference(data) {
     DOM.savedArtifactPath.innerText = data.saved_filepath;
     DOM.savedArtifactBanner.style.display = 'block';
     showToast('💾 Artifact saved to: ' + data.saved_filepath);
+  }
+
+  if (metrics.vram_freed) {
+    showToast('🧹 Auto-freed VRAM: GPU memory cleared for next benchmark!');
   }
 }
 
